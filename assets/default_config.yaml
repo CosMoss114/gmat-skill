@@ -1,0 +1,115 @@
+# =============================================================================
+# GMAT Agent 配置 — 唯一配置入口
+# =============================================================================
+# 修改此文件即可自定义 GMAT 路径，支持绝对路径和相对路径。
+# 相对路径相对于本 Skill 的 assets/ 目录解析。
+#
+# 备选方案: 设置 GMAT_ROOT 环境变量可覆盖 gmat_root 的值。
+#   PowerShell: $env:GMAT_ROOT = "D:\MyGMAT"
+#   Linux/macOS: export GMAT_ROOT=/opt/gmat
+# =============================================================================
+
+# === GMAT 安装路径 ===
+# 改为你自己的 GMAT 安装根目录 (包含 bin/, data/, output/ 的顶层目录)
+gmat_root: "e:\\GMAT\\GMATdev\\gmat-win-R2026a"
+
+# 以下通常无需修改 (自动从 gmat_root 推导)
+gmat_bin: "{gmat_root}\\bin"
+output_dir: "{gmat_root}\\output"
+
+# === 默认天体 ===
+default_central_body: "Earth"
+available_bodies:
+  - "Earth"
+  - "Moon"
+  - "Sun"
+  - "Mars"
+  - "Jupiter"
+  - "Saturn"
+  - "Venus"
+  - "Mercury"
+  - "Uranus"
+  - "Neptune"
+  - "Pluto"
+
+# === 默认坐标系 ===
+default_coordinate_system: "EarthMJ2000Eq"
+common_coordinate_systems:
+  earth: ["EarthMJ2000Eq", "EarthFixed", "EarthICRF"]
+  moon: ["MoonMJ2000Eq", "MoonFixed"]
+  mars: ["MarsMJ2000Eq"]
+  sun: ["SunMJ2000Eq"]
+
+# === 默认轨道参数 (LEO 近地轨道) ===
+default_orbit:
+  state_type: "Cartesian"
+  # Cartesian 状态 (EarthMJ2000Eq)
+  x: 7100.0       # km
+  y: 0.0
+  z: 1300.0
+  vx: 0.0         # km/s
+  vy: 7.35
+  vz: 1.0
+  # Keplerian 备选
+  sma: 7100.0     # km (约 730km 高度)
+  ecc: 0.01
+  inc: 45.0       # 度
+  raan: 0.0
+  aop: 0.0
+  ta: 180.0
+
+# === 默认卫星物理参数 ===
+default_spacecraft:
+  dry_mass: 850.0          # kg
+  cd: 2.2                  # 大气阻力系数
+  cr: 1.8                  # 太阳辐射压系数
+  drag_area: 15.0          # m²
+  srp_area: 15.0           # m²
+
+# === 默认 Propagator ===
+default_propagator:
+  type: "PrinceDormand78"
+  initial_step_size: 60.0  # 秒
+  accuracy: 1.0e-11
+  min_step: 1.0e-6         # 秒
+  max_step: 86400.0        # 秒 (1天)
+
+# === 默认力模型 ===
+default_force_model:
+  central_body: "Earth"
+  point_masses: ["Sun", "Moon", "Jupiter"]
+  drag: false
+  srp: false
+  gravity_degree: 4
+  gravity_order: 4
+  gravity_file: "../data/gravity/earth/JGM3.cof"
+
+# === 默认输出 ===
+default_report:
+  variables: ["Sat.EarthMJ2000Eq.X", "Sat.EarthMJ2000Eq.Y", "Sat.EarthMJ2000Eq.Z",
+              "Sat.EarthMJ2000Eq.VX", "Sat.EarthMJ2000Eq.VY", "Sat.EarthMJ2000Eq.VZ",
+              "Sat.Earth.SMA", "Sat.Earth.ECC", "Sat.Earth.INC",
+              "Sat.Earth.RAAN", "Sat.Earth.AOP", "Sat.Earth.TA"]
+  precision: 16
+  column_width: 23
+  write_headers: true
+  delimiter: " "
+
+# === 时间格式 ===
+date_format: "UTCGregorian"
+default_epoch: "01 Jan 2025 12:00:00.000"
+
+# === 常见天体引力参数 ===
+body_properties:
+  Earth:
+    mu: 398600.4415       # km³/s²
+    radius: 6378.1363     # km
+    j2: 0.0010826269
+  Moon:
+    mu: 4902.8000
+    radius: 1738.0
+  Sun:
+    mu: 1.32712440018e11
+  Mars:
+    mu: 42828.3762
+    radius: 3396.19

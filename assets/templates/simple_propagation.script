@@ -1,0 +1,34 @@
+%% Simple Propagation Template
+%% Propagate a LEO satellite for 3 days, output position and velocity
+
+Create Spacecraft Sat;
+Sat.DateFormat = UTCGregorian;
+Sat.Epoch = '01 Jan 2025 12:00:00.000';
+Sat.CoordinateSystem = EarthMJ2000Eq;
+Sat.DisplayStateType = Keplerian;
+Sat.SMA = 7100;
+Sat.ECC = 0.01;
+Sat.INC = 45;
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 180;
+Sat.DryMass = 850;
+
+Create ForceModel FM;
+FM.CentralBody = Earth;
+
+Create Propagator Prop;
+Prop.FM = FM;
+Prop.Type = PrinceDormand78;
+Prop.InitialStepSize = 60;
+Prop.Accuracy = 1.0e-11;
+
+Create ReportFile RF;
+RF.Filename = 'output_report.txt';
+RF.Precision = 16;
+RF.ColumnWidth = 23;
+RF.Add = {Sat.EarthMJ2000Eq.X, Sat.EarthMJ2000Eq.Y, Sat.EarthMJ2000Eq.Z, ...
+          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ};
+
+BeginMissionSequence;
+Propagate Prop(Sat) {Sat.ElapsedDays = 3};

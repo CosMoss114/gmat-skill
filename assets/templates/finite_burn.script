@@ -1,0 +1,68 @@
+%% Finite Burn Template
+%% Continuous low-thrust propulsion raising orbit over 5 days
+
+Create Spacecraft Sat;
+Sat.DateFormat = UTCGregorian;
+Sat.Epoch = '01 Jan 2025 12:00:00.000';
+Sat.CoordinateSystem = EarthMJ2000Eq;
+Sat.DisplayStateType = Keplerian;
+Sat.SMA = 7100;
+Sat.ECC = 0.01;
+Sat.INC = 45;
+Sat.RAAN = 0;
+Sat.AOP = 0;
+Sat.TA = 180;
+Sat.DryMass = 850;
+
+Create ChemicalTank Tank1;
+Tank1.AllowNegativeFuelMass = false;
+Tank1.FuelMass = 500;
+Tank1.FuelDensity = 1260;
+Tank1.Pressure = 1500;
+Tank1.Temperature = 20;
+Tank1.RefTemperature = 20;
+
+Create ChemicalThruster Thruster1;
+Thruster1.CoordinateSystem = Local;
+Thruster1.Origin = Earth;
+Thruster1.Axes = VNB;
+Thruster1.DutyCycle = 1.0;
+Thruster1.ThrustScaleFactor = 1.0;
+Thruster1.DecrementMass = true;
+Thruster1.Tank = {Tank1};
+Thruster1.MixRatio = {1.0, 1.0};
+Thruster1.GravitationalAccel = 0.00981;
+Thruster1.C1 = 10;
+Thruster1.C2 = 100;
+Thruster1.C3 = 1000;
+Thruster1.K1 = 300;
+Thruster1.K2 = 250;
+Thruster1.K3 = 200;
+
+Sat.Tanks = {Tank1};
+Sat.Thrusters = {Thruster1};
+
+Create FiniteBurn FB;
+FB.Thrusters = {Thruster1};
+
+Create ForceModel FM;
+FM.CentralBody = Earth;
+
+Create Propagator Prop;
+Prop.FM = FM;
+Prop.Type = PrinceDormand78;
+Prop.InitialStepSize = 60;
+Prop.Accuracy = 1.0e-11;
+
+Create ReportFile RF
+RF.Filename = 'output_report.txt'
+RF.Precision = 16
+RF.ColumnWidth = 23
+RF.Add = {Sat.EarthMJ2000Eq.X, Sat.EarthMJ2000Eq.Y, Sat.EarthMJ2000Eq.Z, ...
+          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ}
+
+BeginMissionSequence;
+BeginFiniteBurn FB(Sat);
+Propagate Prop(Sat) {Sat.ElapsedDays = 5};
+EndFiniteBurn FB(Sat);
+Propagate Prop(Sat) {Sat.ElapsedDays = 2};
