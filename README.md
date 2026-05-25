@@ -185,6 +185,9 @@ gmat-agent/
 └── assets/
     ├── system_prompt.txt       # LLM system prompt (GMAT scripting reference)
     ├── python_runner.py        # Python wrapper: load → execute → read results
+    ├── oem_reader.py           # OEM parser: CCSDS OEM v2.0 → Cartesian → Keplerian
+    ├── plot_altitude.py        # Altitude plotter: perigee/apogee time series
+    ├── maneuver_detector.py    # Maneuver detector: sample + binary search (demo)
     ├── default_config.yaml     # Single configuration point
     └── templates/
         ├── simple_propagation.script

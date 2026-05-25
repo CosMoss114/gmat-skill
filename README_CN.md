@@ -185,6 +185,9 @@ gmat-agent/
 └── assets/
     ├── system_prompt.txt       # LLM 系统提示词（GMAT 脚本语法参考）
     ├── python_runner.py        # Python 包装器: 加载 → 执行 → 读取结果
+    ├── oem_reader.py           # OEM 解析器: CCSDS OEM v2.0 → Cartesian → Keplerian
+    ├── plot_altitude.py        # 高度绘图: 近/远地点高度时间序列
+    ├── maneuver_detector.py    # 变轨检测: 采样 + 二分定位（Demo）
     ├── default_config.yaml     # 唯一配置入口
     └── templates/
         ├── simple_propagation.script

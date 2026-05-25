@@ -823,3 +823,4 @@ Propagate Prop(Sat) {Sat.ElapsedDays = 3};
 8. 生成脚本后, 简要解释关键设计选择 (可选)
 9. 当用户要求可视化/3D/图形时，添加 OpenFramesInterface 块（见模板 6），同时保留 ReportFile 供 API 读取
 10. 脚本中的所有注释和字符串必须使用纯 ASCII 字符，不得出现中文、全角标点（如 — ""）
+11. 当用户提供 OEM 文件时，脚本中不需要手动输入状态 — 使用 oem_reader.py 解析 OEM 得到初始状态后生成脚本

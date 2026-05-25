@@ -9,11 +9,22 @@ GMAT Python Runner — 通过 GMAT Python API 加载/执行 .script 文件并返
     {
         "success": true/false,
         "stage": "init"|"load"|"run"|"read",
-        "error": "...",          // 仅失败时
-        "summary": "...",        // GMAT 运行摘要
-        "objects": {...},        // GetRuntimeObject 读取的参数
-        "reports": {...}         // ReportFile 解析后的数据
+        "error": "...",
+        "summary": "...",
+        "objects": {...},
+        "reports": {...}
     }
+
+程序化 API 用法 (无需 .script 文件):
+    from python_runner import init_gmat, create_and_read_state
+
+    init_gmat(r"C:\\GMAT")
+    keplerian = create_and_read_state(
+        epoch="01 Jun 2026 00:00:00.000",
+        x=-5525.77, y=-1872.37, z=3428.75,
+        vx=0.299, vy=-6.928, vz=-3.289
+    )
+    # -> {"SMA": 6767.86, "ECC": 0.00077, "INC": 41.60, ...}
 """
 
 import argparse
@@ -21,6 +32,67 @@ import json
 import sys
 import os
 import traceback
+
+# ==============================================================================
+# 程序化 API: Construct + SetField + Initialize
+# ==============================================================================
+
+# Default Keplerian parameters to read
+_KEPLERIAN_PARAMS = ["SMA", "ECC", "INC", "RAAN", "AOP", "TA", "RMAG", "VMAG"]
+
+
+def create_and_read_state(epoch, x, y, z, vx, vy, vz,
+                          frame="EarthMJ2000Eq", obj_name="Sat"):
+    """
+    通过 GMAT API 直接设置 Cartesian 状态并返回 Keplerian 根数。
+    无需 .script 文件 — 纯 Python 调用。
+
+    Args:
+        epoch:  GMAT 格式的历元字符串 ("01 Jun 2026 00:00:00.000")
+        x, y, z:   位置 (km)
+        vx, vy, vz: 速度 (km/s)
+        frame:      坐标系 (默认 EarthMJ2000Eq)
+        obj_name:   对象名
+
+    Returns:
+        dict: Keplerian elements + perigee/apogee altitude,
+              或 {"error": "..."} 如果失败
+    """
+    try:
+        # 确保不重名
+        gmat.Clear(obj_name)
+        sat = gmat.Construct("Spacecraft", obj_name)
+        sat.SetField("DateFormat", "UTCGregorian")
+        sat.SetField("Epoch", epoch)
+        sat.SetField("CoordinateSystem", frame)
+        sat.SetField("DisplayStateType", "Cartesian")
+        sat.SetField("X", x)
+        sat.SetField("Y", y)
+        sat.SetField("Z", z)
+        sat.SetField("VX", vx)
+        sat.SetField("VY", vy)
+        sat.SetField("VZ", vz)
+
+        # Initialize 后才能读取 Keplerian
+        gmat.Initialize()
+
+        result = {}
+        for p in _KEPLERIAN_PARAMS:
+            try:
+                result[p] = sat.GetNumber(p)
+            except Exception:
+                result[p] = None
+
+        # 计算近/远地点高度
+        sma = result.get("SMA")
+        ecc = result.get("ECC")
+        if sma and ecc is not None:
+            result["Perigee_km"] = sma * (1 - ecc) - 6378.1363
+            result["Apogee_km"] = sma * (1 + ecc) - 6378.1363
+
+        return result
+    except Exception as e:
+        return {"error": str(e)}
 
 # ==============================================================================
 # GMAT 环境初始化
@@ -144,7 +216,7 @@ def run_mission() -> dict:
 COMMON_PARAMETERS = [
     "SMA", "ECC", "INC", "RAAN", "AOP", "TA",
     "X", "Y", "Z", "VX", "VY", "VZ",
-    "RMAG", "VMAG", "Altitude",
+    "RMAG", "VMAG", "Earth.Altitude",
     "Latitude", "Longitude",
     "TotalMass", "DryMass",
     "ElapsedSecs", "ElapsedDays",

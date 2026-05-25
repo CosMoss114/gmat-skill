@@ -24,6 +24,7 @@ description: "Use when the user wants to run GMAT (General Mission Analysis Tool
 - 不要尝试运行 GMAT GUI（GMAT.exe），只使用 Python API 方式
 - 生成的 `.script` 文件是**标准 GMAT 格式**，可手动加载到 GMAT GUI 进行图形化仿真和 3D 可视化
 - 当用户要求可视化时，在脚本中添加 `OpenFramesInterface` 块（见 system_prompt.txt 模板 6）
+- 当用户提供 OEM 文件时，使用 `assets/oem_reader.py` 解析，遇到轨道分析需求可用 `assets/plot_altitude.py`
 
 ## 已验证的 GMAT 脚本语法（重要）
 
@@ -53,6 +54,9 @@ description: "Use when the user wants to run GMAT (General Mission Analysis Tool
 | `README.md` | 英文使用说明 |
 | `README_CN.md` | 中文使用说明 |
 | `assets/system_prompt.txt` | LLM 系统提示词 — GMAT 脚本语法完整参考 |
-| `assets/python_runner.py` | Python 包装器 — 加载/执行/读取结果 |
+| `assets/python_runner.py` | Python 包装器 — 加载/执行/读取结果 + 程序化 API |
+| `assets/oem_reader.py` | OEM 解析器 — 解析 CCSDS OEM v2.0，Cartesian→Keplerian 解析计算 |
+| `assets/plot_altitude.py` | 高度绘图 — 近/远地点高度时间序列图 |
+| `assets/maneuver_detector.py` | 变轨检测 — 采样+二分定位（Demo，待完善） |
 | `assets/default_config.yaml` | **唯一配置入口** — GMAT 路径、轨道默认值、物理常量 |
 | `assets/templates/*.script` | 可运行的脚本模板，供参考 |
