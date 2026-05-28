@@ -33,19 +33,19 @@ Burn1.Element3 = 0;
 Burn1.DecrementMass = false;
 
 Create DifferentialCorrector DC;
-DC.MaxIterations = 50;
+DC.MaximumIterations = 50;
 
-Create ReportFile RF
-RF.Filename = 'output_report.txt'
-RF.Precision = 16
-RF.ColumnWidth = 23
+Create ReportFile RF;
+RF.Filename = 'output_report.txt';
+RF.Precision = 16;
+RF.ColumnWidth = 23;
 RF.Add = {Sat.EarthMJ2000Eq.X, Sat.EarthMJ2000Eq.Y, Sat.EarthMJ2000Eq.Z, ...
-          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ}
+          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ};
 
 BeginMissionSequence;
-Target DC;
-  Vary 'DC(Burn1.Element1 = 1.5, {Perturbation = 0.0001, MaxStep = 0.5})';
+Target 'Hohmann Transfer to GEO' DC {SolveMode = Solve, ExitMode = SaveAndContinue};
+  Vary 'Vary Burn Delta-V' DC(Burn1.Element1 = 1.5, {Perturbation = 0.0001, Lower = 0.5, Upper = 10.0, MaxStep = 0.5});
   Maneuver Burn1(Sat);
   Propagate Prop(Sat) {Sat.Earth.Apoapsis};
-  Achieve 'DC(Sat.Earth.RMAG = 42165, {Tolerance = 0.1})';
+  Achieve 'Achieve GEO' DC(Sat.Earth.RMAG = 42165, {Tolerance = 0.1});
 EndTarget;

@@ -1,5 +1,5 @@
 %% Finite Burn Template
-%% Continuous low-thrust propulsion raising orbit over 5 days
+%% Continuous low-thrust propulsion raising orbit over 1 day
 
 Create Spacecraft Sat;
 Sat.DateFormat = UTCGregorian;
@@ -13,31 +13,34 @@ Sat.RAAN = 0;
 Sat.AOP = 0;
 Sat.TA = 180;
 Sat.DryMass = 850;
+Sat.Cd = 2.2;
+Sat.Cr = 1.8;
+Sat.DragArea = 15;
+Sat.SRPArea = 15;
 
 Create ChemicalTank Tank1;
 Tank1.AllowNegativeFuelMass = false;
-Tank1.FuelMass = 500;
+Tank1.FuelMass = 756;
 Tank1.FuelDensity = 1260;
+Tank1.Volume = 0.75;
 Tank1.Pressure = 1500;
 Tank1.Temperature = 20;
 Tank1.RefTemperature = 20;
+Tank1.PressureModel = PressureRegulated;
 
 Create ChemicalThruster Thruster1;
 Thruster1.CoordinateSystem = Local;
 Thruster1.Origin = Earth;
 Thruster1.Axes = VNB;
-Thruster1.DutyCycle = 1.0;
-Thruster1.ThrustScaleFactor = 1.0;
+Thruster1.DutyCycle = 1;
+Thruster1.ThrustScaleFactor = 1;
 Thruster1.DecrementMass = true;
 Thruster1.Tank = {Tank1};
-Thruster1.MixRatio = {1.0, 1.0};
-Thruster1.GravitationalAccel = 0.00981;
-Thruster1.C1 = 10;
-Thruster1.C2 = 100;
-Thruster1.C3 = 1000;
-Thruster1.K1 = 300;
-Thruster1.K2 = 250;
-Thruster1.K3 = 200;
+Thruster1.MixRatio = [1];
+Thruster1.GravitationalAccel = 9.81;
+Thruster1.C1 = 1
+Thruster1.C2 = 0;
+Thruster1.C3 = 0;
 
 Sat.Tanks = {Tank1};
 Sat.Thrusters = {Thruster1};
@@ -54,15 +57,15 @@ Prop.Type = PrinceDormand78;
 Prop.InitialStepSize = 60;
 Prop.Accuracy = 1.0e-11;
 
-Create ReportFile RF
-RF.Filename = 'output_report.txt'
-RF.Precision = 16
-RF.ColumnWidth = 23
+Create ReportFile RF;
+RF.Filename = 'output_report.txt';
+RF.Precision = 16;
+RF.ColumnWidth = 23;
 RF.Add = {Sat.EarthMJ2000Eq.X, Sat.EarthMJ2000Eq.Y, Sat.EarthMJ2000Eq.Z, ...
-          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ}
+          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ};
 
 BeginMissionSequence;
 BeginFiniteBurn FB(Sat);
-Propagate Prop(Sat) {Sat.ElapsedDays = 5};
+Propagate Prop(Sat) {Sat.ElapsedDays = 0.2};
 EndFiniteBurn FB(Sat);
-Propagate Prop(Sat) {Sat.ElapsedDays = 2};
+Propagate Prop(Sat) {Sat.ElapsedDays = 1.8};

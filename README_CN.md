@@ -165,6 +165,7 @@ OFI.ShowPlot = true;
 | 任务描述 | 模板文件 |
 |----------|----------|
 | 简单轨道传播（3 天） | `assets/templates/simple_propagation.script` |
+| 参数化传播（命令行可调） | `assets/templates/parameterized_propagation.script` |
 | Hohmann 转移目标求解 | `assets/templates/impulsive_targeting.script` |
 | 连续小推力推进 | `assets/templates/finite_burn.script` |
 
@@ -174,6 +175,70 @@ VS Code Chat 中的示例提示：
 - *"设计从 300km LEO 到 GEO 的 Hohmann 转移，计算所需 ΔV"*
 - *"扫描 SMA 从 6600 到 7600 km，记录轨道周期变化"*
 - *"模拟连续推力从 LEO 螺旋上升到 10000km，持续 10 天"*
+
+## Python Runner — 完整功能
+
+`python_runner.py` 现已支持三项额外能力：
+
+### 模板参数化
+
+脚本中使用 `{{KEY}}` 占位符，通过 `--var` / `-D` 传入：
+
+```powershell
+python python_runner.py --script templates/parameterized_propagation.script \
+  -D SMA=7200 -D INC=60 -D DURATION=7 --objects Sat
+```
+
+### 脚本校验
+
+执行前通过 `GmatConsole` 预检语法：
+
+```powershell
+# 仅校验
+python python_runner.py --script test.script --validate-only
+
+# 校验 + 执行
+python python_runner.py --script test.script --validate --objects Sat
+```
+
+### 错误诊断
+
+`load_script()` 或 `run_mission()` 失败时，自动从 `GmatLog.txt` 提取行号级错误；日志为空时降级至 `GmatConsole` 获取带行号的详细诊断。
+
+## OEM 管线 — 中国空间站轨道分析
+
+三个工具处理 CCSDS OEM v2.0 格式星历：
+
+| 工具 | 用途 |
+|------|------|
+| `oem_reader.py` | 解析 OEM → Cartesian → Keplerian（纯 numpy，不依赖 GMAT） |
+| `plot_altitude.py` | 三面板高度图：近/远地点、SMA+趋势、偏心率 |
+| `maneuver_detector.py` | 轨道周期平滑 SMA 跳跃检测，已滤除 J2 假阳性 |
+
+```powershell
+python oem_reader.py CSS_OEM.dat
+python plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
+python maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
+```
+
+## 发射窗口预测
+
+`launch_window.py` 计算空间站过顶发射窗口（神舟/天舟任务）：
+
+- **算法**：Kepler+J2 解析反向传播 → EME2000→ECEF→仰角 → 过顶检测
+- **方向滤波**：仅 NW→SE 降轨通过（落区安全 — 东南向海域）
+- **默认阈值**：60° 峰值仰角
+- **站点**：酒泉（40.96°N, 100.29°E）和文昌（19.32°N, 109.80°E）
+
+```powershell
+# 神舟（酒泉）
+python launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
+
+# 天舟（文昌）
+python launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
+```
+
+**验证**：神舟23号（2026年5月24日 23:08 BJT）唯一有效窗口为降轨过顶，峰值 79.1°，AOS 23:06 BJT，与实际 T0 误差 2 分钟以内。
 
 ## 文件结构
 
@@ -186,26 +251,31 @@ gmat-agent/
     ├── system_prompt.txt       # LLM 系统提示词（GMAT 脚本语法参考）
     ├── python_runner.py        # Python 包装器: 加载 → 执行 → 读取结果
     ├── oem_reader.py           # OEM 解析器: CCSDS OEM v2.0 → Cartesian → Keplerian
-    ├── plot_altitude.py        # 高度绘图: 近/远地点高度时间序列
-    ├── maneuver_detector.py    # 变轨检测: 采样 + 二分定位（Demo）
+    ├── plot_altitude.py        # 高度绘图: 近/远地点时间序列
+    ├── maneuver_detector.py    # 变轨检测: 轨道周期平滑 SMA 跳跃检测
+    ├── launch_window.py        # 发射窗口计算: 空间站过顶预测
     ├── default_config.yaml     # 唯一配置入口
     └── templates/
         ├── simple_propagation.script
+        ├── parameterized_propagation.script  # {{KEY}} 模板占位符
         ├── impulsive_targeting.script
         └── finite_burn.script
 ```
 
 ## 已验证的脚本规则
 
-以下规则通过 GMAT Python API 实测验证：
+以下规则通过 GMAT Python API 与 GmatConsole 实测验证：
 
-1. ReportFile 配置行**不加分号** — `RF.Filename = 'out.txt'` 正确，`RF.Filename = 'out.txt';` 错误
+1. **所有赋值行以分号结尾** — 包括 ReportFile。`RF.Filename = 'out.txt';` 正确，不带分号导致解析错误
 2. `...` 是 `{}` 块内的**续行符**
 3. ReportFile **自动写入**，无需显式 `Report RF;` 命令
 4. `RF.Add` 只接受 **Cartesian** 参数（`Sat.EarthMJ2000Eq.X`），不接受 Keplerian（`Sat.Earth.SMA`）
 5. 月球在 Python API 中名称为 **`Luna`**
-6. 点质量引力源在 API 模式下可能导致轨道发散 — 推荐**纯地球引力**
-7. 使用 **Keplerian** 状态初始化（`DisplayStateType = Keplerian`，SMA/ECC/INC）最简洁
+6. `DifferentialCorrector` 字段：**`MaximumIterations`** 而非 `MaxIterations`
+7. `ChemicalThruster.C1` 是**推力系数 (N)**，不是 Isp。`GravitationalAccel` 用 **SI 单位 (m/s²)**：填 `9.81` 而非 `0.00981`
+8. `ChemicalTank.PressureModel = PressureRegulated;`（不是 `PressureRegulated = true`）
+9. `MixRatio` 数组大小必须匹配贮箱数：一个贮箱用 `[1]`
+10. Target/Vary/Achieve 语法：`Vary '描述' DC(变量=值, {选项})` — DC 在引号外侧
 
 ## 常见问题
 

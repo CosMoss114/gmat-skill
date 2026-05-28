@@ -27,48 +27,82 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from oem_reader import parse_oem, keplerian_batch
 
 
-def detect_maneuver(oem_path, sample_step=500, sma_threshold=10.0):
+def detect_maneuver(oem_path, sample_step=500, sma_threshold=5.0, orbit_window=24):
     """
-    Detect candidate maneuvers by sampling and comparing Keplerian elements.
+    Detect candidate maneuvers by comparing per-orbit-smoothed SMA.
+
+    J2 (Earth oblateness) causes ~7 km SMA oscillation per orbit at LEO.
+    Without orbit-period smoothing, natural oscillations are misidentified
+    as maneuvers. This function smooths SMA over one orbital period before
+    differencing, then flags persistent jumps above sma_threshold.
 
     Args:
         oem_path:       Path to OEM file
         sample_step:    Spacing between coarse samples (in data points)
-        sma_threshold:  dSMA threshold in km to flag a candidate maneuver
+        sma_threshold:  dSMA threshold in km AFTER orbit-period smoothing
+        orbit_window:   Points per orbit for SMA smoothing (default 24 ≈ 90min/4min)
 
     Returns:
         dict with keys:
             detected:       bool
-            candidates:     list of (idx_lo, idx_hi, dSMA)
-            maneuver_epoch: str or None (epoch of best candidate)
-            dV_estimate:    float or None (raw velocity difference, NOT propulsive dV)
+            candidates:     list of (idx_lo, idx_hi, dSMA_smoothed)
+            maneuver_epoch: str or None
+            dV_estimate:    float or None
     """
     data = parse_oem(oem_path)
     n = len(data["times"])
 
-    # Coarse sampling
-    indices = list(range(0, n, sample_step))
-    sample_states = {
-        "X": data["X"][indices], "Y": data["Y"][indices], "Z": data["Z"][indices],
-        "VX": data["VX"][indices], "VY": data["VY"][indices], "VZ": data["VZ"][indices],
-    }
-    sma, _, _, _, _ = keplerian_batch(sample_states)
+    if n < 2 * orbit_window:
+        return {"detected": False, "candidates": [], "maneuver_epoch": None,
+                "dV_estimate": None, "note": f"Not enough data points ({n})"}
 
-    # Find jumps
+    # Compute full-resolution SMA for per-orbit smoothing
+    sma_full, _, _, _, _ = keplerian_batch(data)
+
+    # Per-orbit smoothing: boxcar filter (one orbit window)
+    # Use mode="valid" to avoid edge artifacts, then trim identical amount from both ends
+    kernel = np.ones(orbit_window) / orbit_window
+    sma_smoothed = np.convolve(sma_full, kernel, mode="valid")  # len = n - orbit_window + 1
+    trim = orbit_window // 2
+    # sma_smoothed already has valid-only convolution; further trim for safety
+    sma_trimmed = sma_smoothed[trim:len(sma_smoothed) - trim]
+
+    if len(sma_trimmed) < 2 * sample_step:
+        return {"detected": False, "candidates": [], "maneuver_epoch": None,
+                "dV_estimate": None, "note": f"Too few points after smoothing ({len(sma_trimmed)})"}
+
+    # Map trimmed array indices back to original data indices:
+    # sma_trimmed[i] corresponds to original index: i + trim + orbit_window//2
+    offset = trim + orbit_window
+
+    # Coarse sample the TRIMMED, SMOOTHED SMA
+    n_trimmed = len(sma_trimmed)
+    indices_trimmed = list(range(0, n_trimmed, sample_step))
+    if len(indices_trimmed) < 2:
+        return {"detected": False, "candidates": [], "maneuver_epoch": None,
+                "dV_estimate": None, "note": "Coarse sampling too sparse"}
+
+    sma_sampled = sma_trimmed[indices_trimmed]
+
+    # Find jumps in smoothed SMA
     candidates = []
-    for i in range(1, len(sma)):
-        dSMA = abs(sma[i] - sma[i - 1])
+    for i in range(1, len(sma_sampled)):
+        dSMA = abs(sma_sampled[i] - sma_sampled[i - 1])
         if dSMA > sma_threshold:
-            candidates.append((indices[i - 1], indices[i], dSMA))
+            # Map back to original indices: sma_trimmed[j] ⇔ original[j + offset]
+            orig_lo = indices_trimmed[i - 1] + offset
+            orig_hi = indices_trimmed[i] + offset
+            candidates.append((orig_lo, orig_hi, dSMA))
 
     if not candidates:
-        return {"detected": False, "candidates": [], "maneuver_epoch": None, "dV_estimate": None}
+        return {"detected": False, "candidates": [], "maneuver_epoch": None,
+                "dV_estimate": None}
 
     # Pick the largest jump
     best = max(candidates, key=lambda c: c[2])
-    lo, hi, _ = best
+    lo, hi, dSMA_best = best
 
-    # Binary search to narrow down
+    # Binary search on raw SMA to pinpoint (now we know it's a real persistent shift)
     while hi - lo > 1:
         mid = (lo + hi) // 2
         mid_states = {
@@ -96,6 +130,7 @@ def detect_maneuver(oem_path, sample_step=500, sma_threshold=10.0):
         "candidates": candidates,
         "maneuver_epoch": data["times"][lo].strftime("%Y-%m-%dT%H:%M:%S"),
         "dV_estimate": dv_raw,
+        "dSMA_smoothed": dSMA_best,
         "idx_range": (lo, hi),
     }
 
@@ -106,16 +141,23 @@ if __name__ == "__main__":
     parser.add_argument("oem", help="Path to OEM file")
     parser.add_argument("--step", "-s", type=int, default=500,
                         help="Coarse sampling step (default 500)")
-    parser.add_argument("--threshold", "-t", type=float, default=10.0,
-                        help="dSMA threshold in km (default 10)")
+    parser.add_argument("--threshold", "-t", type=float, default=5.0,
+                        help="dSMA threshold in km (default 5.0, applied after orbit-period smoothing)")
+    parser.add_argument("--window", "-w", type=int, default=24,
+                        help="Points per orbit for SMA smoothing (default 24)")
     args = parser.parse_args()
 
-    result = detect_maneuver(args.oem, args.step, args.threshold)
+    result = detect_maneuver(args.oem, args.step, args.threshold, args.window)
 
     if result["detected"]:
         print(f"Maneuver candidate at {result['maneuver_epoch']}")
+        print(f"  dSMA (smoothed): {result.get('dSMA_smoothed', '?'):.2f} km")
         print(f"  dV (raw, NOT propulsive): {result['dV_estimate']:.2f} m/s")
-        print(f"  SMA change near maneuver point: see binary search range {result['idx_range']}")
+        print(f"  Index range: {result['idx_range']}")
     else:
-        print("No maneuver detected at current threshold.")
-        print("Try lowering --threshold if you suspect small maneuvers.")
+        note = result.get("note", "")
+        print(f"No maneuver detected at current threshold ({args.threshold} km).")
+        if note:
+            print(f"  {note}")
+        else:
+            print("  Try lowering --threshold if you suspect small maneuvers.")

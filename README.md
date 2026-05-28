@@ -160,11 +160,84 @@ OFI.ShowPlot = true;
 
 > **Note**: GMAT `.script` files must use **ASCII only**. Non-ASCII characters (em dash, smart quotes, Chinese characters) in comments will cause parse errors.
 
+## Python Runner — Full Features
+
+`python_runner.py` now includes three additional capabilities:
+
+### Template Parameterization
+
+Use `{{KEY}}` placeholders in scripts and override with `--var` / `-D`:
+
+```powershell
+python python_runner.py --script templates/parameterized_propagation.script \
+  -D SMA=7200 -D INC=60 -D DURATION=7 --objects Sat
+```
+
+### Script Validation
+
+Pre-check script syntax via `GmatConsole` before execution:
+
+```powershell
+# Validate only (no execution)
+python python_runner.py --script test.script --validate-only
+
+# Validate then execute
+python python_runner.py --script test.script --validate --objects Sat
+```
+
+### Error Diagnostics
+
+When `load_script()` or `run_mission()` fails, `python_runner.py` automatically extracts line-level error messages from `GmatLog.txt` or falls back to `GmatConsole` for detailed diagnostics. Errors include exact line numbers and field names.
+
+## OEM Pipeline — CSS Orbit Analysis
+
+Three tools for processing CCSDS OEM v2.0 files (e.g., China Space Station ephemeris):
+
+| Tool | Purpose |
+|------|---------|
+| `oem_reader.py` | Parse OEM → Cartesian states → Keplerian elements (numpy, no GMAT API) |
+| `plot_altitude.py` | 3-panel altitude time series: Perigee/Apogee, SMA+trend, Eccentricity |
+| `maneuver_detector.py` | Orbit-period-smoothed SMA jump detection with J2 oscillation filtering |
+
+```powershell
+# Quick orbit summary
+python oem_reader.py CSS_OEM.dat
+
+# Altitude visualization
+python plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
+
+# Maneuver detection (orbit-period smoothing to avoid J2 false positives)
+python maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
+```
+
+## Launch Window Prediction
+
+`launch_window.py` computes CSS overflight windows for launch sites (Shenzhou / Tianzhou missions):
+
+- **Algorithm**: Kepler + J2 back-propagation → EME2000→ECEF→elevation → pass detection
+- **Direction filter**: Only NW→SE descending passes accepted (range safety — China launches southeast toward open ocean)
+- **Default threshold**: 60° peak elevation
+- **Sites**: Jiuquan (40.96°N, 100.29°E) and Wenchang (19.32°N, 109.80°E)
+
+```powershell
+# Shenzhou from Jiuquan
+python launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
+
+# Tianzhou from Wenchang (future prediction)
+python launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
+
+# JSON output for scripts
+python launch_window.py CSS_OEM.dat -s Jiuquan --json
+```
+
+**Verified**: Shenzhou-23 (launched May 24, 2026 at 23:08 BJT) — the only valid window detected is a descending pass peaking at 79.1° elevation with AOS at 23:06 BJT, matching the actual T0 within 2 minutes.
+
 ## Examples
 
 | Description | Template |
 |-------------|----------|
 | Simple orbit propagation (3 days) | `assets/templates/simple_propagation.script` |
+| Parameterized propagation (CLI vars) | `assets/templates/parameterized_propagation.script` |
 | Hohmann transfer targeting | `assets/templates/impulsive_targeting.script` |
 | Continuous low-thrust | `assets/templates/finite_burn.script` |
 
@@ -185,27 +258,33 @@ gmat-agent/
 └── assets/
     ├── system_prompt.txt       # LLM system prompt (GMAT scripting reference)
     ├── python_runner.py        # Python wrapper: load → execute → read results
+    │                           #   + --validate, --var, error diagnostics
     ├── oem_reader.py           # OEM parser: CCSDS OEM v2.0 → Cartesian → Keplerian
     ├── plot_altitude.py        # Altitude plotter: perigee/apogee time series
-    ├── maneuver_detector.py    # Maneuver detector: sample + binary search (demo)
+    ├── maneuver_detector.py    # Maneuver detector: orbit-smoothed SMA jump detection
+    ├── launch_window.py        # Launch window calculator for CSS missions
     ├── default_config.yaml     # Single configuration point
     └── templates/
         ├── simple_propagation.script
+        ├── parameterized_propagation.script  # {{KEY}} template vars
         ├── impulsive_targeting.script
         └── finite_burn.script
 ```
 
 ## Verified Scripting Rules
 
-These were discovered through live testing against GMAT's Python API:
+These were discovered through live testing against GMAT's Python API and GmatConsole:
 
-1. ReportFile configuration lines use **no semicolons** — `RF.Filename = 'out.txt'` not `RF.Filename = 'out.txt';`
+1. **All assignment lines end with semicolons** — including ReportFile. `RF.Filename = 'out.txt';` correct, without `;` causes parse errors
 2. `...` is the **line continuation** marker inside `{}` blocks
 3. ReportFile **auto-writes** at mission end — no explicit `Report RF;` needed
 4. `RF.Add` only accepts **Cartesian** parameters (`Sat.EarthMJ2000Eq.X`), not Keplerian (`Sat.Earth.SMA`)
 5. The Moon is named **`Luna`** in the Python API
-6. Point masses may cause orbit divergence in API mode — use **Earth-only gravity** for reliability
-7. Use **Keplerian** state initialization (`DisplayStateType = Keplerian`, SMA/ECC/INC) for clean circular orbits
+6. `DifferentialCorrector` field: **`MaximumIterations`** not `MaxIterations`
+7. `ChemicalThruster.C1` is **thrust coefficient (N)**, not Isp. `GravitationalAccel` is in **SI units (m/s²)**: use `9.81` not `0.00981`
+8. `ChemicalTank.PressureModel = PressureRegulated;` (not `PressureRegulated = true`)
+9. `MixRatio` array size must match tank count: `[1]` for one tank
+10. Target/Vary/Achieve syntax: `Vary 'desc' DC(var=val, {opts})` — DC goes outside the quotes
 
 ## Troubleshooting
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 GMAT Python Runner — 通过 GMAT Python API 加载/执行 .script 文件并返回结构化结果。
 
@@ -29,6 +29,8 @@ GMAT Python Runner — 通过 GMAT Python API 加载/执行 .script 文件并返
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 import os
 import traceback
@@ -125,8 +127,10 @@ def init_gmat(gmat_root: str) -> dict:
     初始化 GMAT Python API。
     返回 {"success": bool, "stage": "init", "error": str}
     """
+    global _gmat_root_cache
     try:
         gmat_root = os.path.abspath(gmat_root)
+        _gmat_root_cache = gmat_root  # 缓存给错误诊断用
         bin_dir = os.path.join(gmat_root, "bin")
         api_startup = os.path.join(bin_dir, "api_startup_file.txt")
 
@@ -159,52 +163,270 @@ def init_gmat(gmat_root: str) -> dict:
 
 
 # ==============================================================================
-# 脚本加载与执行
+# 错误诊断: 从 GmatLog.txt 提取具体错误信息
 # ==============================================================================
 
-def load_script(script_path: str) -> dict:
+def _find_gmat_log(gmat_root: str) -> str:
+    """在 GMAT 输出目录中查找 GmatLog.txt"""
+    candidates = [
+        os.path.join(gmat_root, "output", "GmatLog.txt"),
+        os.path.join(gmat_root, "bin", "GmatLog.txt"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return ""
+
+
+def extract_script_errors(gmat_root: str, script_path: str = None) -> list:
+    """
+    从 GmatLog.txt 中提取与脚本解析/执行相关的错误行。
+    返回 [{"line": int, "message": str, "raw": str}, ...]
+    """
+    log_path = _find_gmat_log(gmat_root)
+    if not log_path:
+        return []
+
+    errors = []
+    script_name = os.path.basename(script_path) if script_path else ""
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                # GMAT 错误行格式: "   line_num: path: **** ERROR **** ..."
+                m = re.search(
+                    r"(?:^\s*(\d+):\s*(.+?):\s*\*+\s*(ERROR|Exception|Hardware Exception).*?\*+\s*(.+))",
+                    line
+                )
+                if m:
+                    errors.append({
+                        "line": int(m.group(1)),
+                        "file": m.group(2).strip(),
+                        "type": m.group(3).strip(),
+                        "message": m.group(4).strip(),
+                        "raw": line,
+                    })
+                    continue
+
+                # 备用匹配: **** ERROR **** ...
+                m2 = re.search(r"\*+\s*(ERROR|Exception)\s*\*+\s*(.+)", line)
+                if m2:
+                    errors.append({
+                        "line": 0,
+                        "file": script_name,
+                        "type": m2.group(1).strip(),
+                        "message": m2.group(2).strip(),
+                        "raw": line,
+                    })
+    except Exception:
+        pass
+
+    return errors
+
+
+# ==============================================================================
+# 脚本校验: 通过 GmatConsole 子进程预检脚本
+# ==============================================================================
+
+def validate_script(script_path: str, gmat_root: str) -> dict:
+    """
+    通过 GmatConsole --run --minimize 预检脚本语法。
+    返回 {"valid": bool, "errors": [...], "raw_output": str}
+
+    注意: GmatConsole 会实际执行脚本，对长仿真可能较慢。
+    """
+    gmat_root = os.path.abspath(gmat_root)
+    gmat_console = os.path.join(gmat_root, "bin", "GmatConsole.exe")
+    if not os.path.isfile(gmat_console):
+        # Linux/macOS fallback
+        gmat_console = os.path.join(gmat_root, "bin", "GmatConsole")
+    if not os.path.isfile(gmat_console):
+        return {"valid": False, "errors": [{"line": 0, "message": f"GmatConsole not found: {gmat_console}"}], "raw_output": ""}
+
+    script_abs = os.path.abspath(script_path)
+
+    try:
+        proc = subprocess.run(
+            [gmat_console, "--run", script_abs, "--minimize"],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.join(gmat_root, "bin"),
+        )
+        output = proc.stdout + "\n" + proc.stderr
+
+        # 提取错误行
+        errors = []
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            m = re.search(
+                r"(?:^\s*(\d+):\s*(.+?):\s*\*+\s*(ERROR|Exception|Hardware Exception).*?\*+\s*(.+))",
+                line
+            )
+            if m:
+                errors.append({
+                    "line": int(m.group(1)),
+                    "file": m.group(2).strip(),
+                    "type": m.group(3).strip(),
+                    "message": m.group(4).strip(),
+                })
+                continue
+            m2 = re.search(r"\*+\s*(ERROR|Exception)\s*\*+\s*(.+)", line)
+            if m2:
+                errors.append({
+                    "line": 0, "file": os.path.basename(script_path),
+                    "type": m2.group(1).strip(), "message": m2.group(2).strip(),
+                })
+
+        status_line = ""
+        for l in output.splitlines():
+            if "successful" in l.lower() or "failed" in l.lower():
+                status_line = l
+
+        return {
+            "valid": len(errors) == 0 and proc.returncode == 0,
+            "errors": errors,
+            "raw_output": output,
+            "status_line": status_line,
+        }
+    except subprocess.TimeoutExpired:
+        return {"valid": False, "errors": [{"line": 0, "message": "GmatConsole validation timed out (120s)"}], "raw_output": ""}
+    except Exception as e:
+        return {"valid": False, "errors": [{"line": 0, "message": f"GmatConsole validation failed: {str(e)}"}], "raw_output": ""}
+
+
+# ==============================================================================
+# 模板参数化: 占位符替换
+# ==============================================================================
+
+def apply_template(script_path: str, variables: dict) -> str:
+    """
+    读取脚本文件，将 {{KEY}} 占位符替换为对应值，写入临时文件并返回路径。
+
+    示例:
+        script 内容:  Sat.SMA = {{SMA}};
+        调用:         apply_template("t.script", {"SMA": "7100"})
+        结果:         Sat.SMA = 7100;
+
+    返回: 临时脚本文件的绝对路径 (调用方负责清理)
+    """
+    script_path = os.path.abspath(script_path)
+    with open(script_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    for key, value in variables.items():
+        placeholder = "{{" + key + "}}"
+        content = content.replace(placeholder, str(value))
+
+    # 写入临时文件 (保留原文件名便于错误定位)
+    dir_name = os.path.dirname(script_path)
+    base_name = os.path.splitext(os.path.basename(script_path))[0]
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".script", prefix=base_name + "_", dir=dir_name
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    return tmp_path
+
+
+# ==============================================================================
+# 脚本加载与执行 (带错误诊断)
+# ==============================================================================
+
+# GMAT 根目录缓存 (init 后设置)
+_gmat_root_cache = ""
+_original_stdout = None
+
+
+def _suppress_gmat_output():
+    """将 stdout 重定向到 os.devnull，抑制 GMAT 调试输出"""
+    global _original_stdout
+    _original_stdout = sys.stdout
+    sys.stdout = open(os.devnull, "w")
+
+
+def _restore_stdout():
+    """恢复原始 stdout"""
+    global _original_stdout
+    if _original_stdout:
+        sys.stdout.close()
+        sys.stdout = _original_stdout
+        _original_stdout = None
+
+
+def load_script(script_path: str, gmat_root: str = "") -> dict:
     """
     加载 GMAT .script 文件。
-    返回 {"success": bool, "stage": "load", "error": str}
+    失败时自动从 GmatLog.txt 提取详细错误；若无，降级到 GmatConsole 校验。
+    返回 {"success": bool, "stage": "load", "error": str, "details": [...]}
     """
     try:
         script_path = os.path.abspath(script_path)
         if not os.path.exists(script_path):
-            return {"success": False, "stage": "load", "error": f"脚本文件不存在: {script_path}"}
+            return {"success": False, "stage": "load", "error": f"脚本文件不存在: {script_path}", "details": []}
 
         result = gmat.LoadScript(script_path)
         if not result:
-            return {"success": False, "stage": "load", "error": "GMAT 无法解析脚本文件。请检查语法。"}
+            root = gmat_root or _gmat_root_cache
+            details = extract_script_errors(root, script_path) if root else []
+            # GmatLog 通常被 API 覆盖为空，降级到 GmatConsole
+            if not details and root and os.path.isfile(
+                os.path.join(root, "bin", "GmatConsole.exe") if os.name == "nt"
+                else os.path.join(root, "bin", "GmatConsole")
+            ):
+                val = validate_script(script_path, root)
+                if val.get("errors"):
+                    details = val["errors"]
+            if details:
+                lines = "; ".join(
+                    f"Line {d['line']}: {d['message']}" for d in details[:3]
+                )
+                return {
+                    "success": False, "stage": "load",
+                    "error": f"GMAT 无法解析脚本文件: {lines}",
+                    "details": details,
+                }
+            return {"success": False, "stage": "load", "error": "GMAT 无法解析脚本文件。请检查语法。", "details": []}
 
-        return {"success": True, "stage": "load"}
+        return {"success": True, "stage": "load", "details": []}
     except Exception as e:
-        return {"success": False, "stage": "load", "error": f"脚本加载异常: {str(e)}"}
+        return {"success": False, "stage": "load", "error": f"脚本加载异常: {str(e)}", "details": []}
 
 
 def run_mission() -> dict:
     """
     执行已加载的 GMAT 任务。
-    返回 {"success": bool, "stage": "run", "error": str, "summary": str}
+    失败时自动从 GmatLog.txt 提取详细错误。
     """
     try:
         result = gmat.RunScript()
         summary = gmat.GetRunSummary() if hasattr(gmat, "GetRunSummary") else ""
 
         if not result:
+            details = extract_script_errors(_gmat_root_cache) if _gmat_root_cache else []
+            if details:
+                lines = "; ".join(
+                    f"Line {d['line']}: {d['message']}" for d in details[:3]
+                )
+                return {
+                    "success": False, "stage": "run",
+                    "error": f"任务执行失败: {lines}",
+                    "summary": summary, "details": details,
+                }
             return {
-                "success": False,
-                "stage": "run",
+                "success": False, "stage": "run",
                 "error": "任务执行失败。请检查脚本中的物理参数和停止条件。",
-                "summary": summary
+                "summary": summary, "details": [],
             }
 
-        return {"success": True, "stage": "run", "summary": summary}
+        return {"success": True, "stage": "run", "summary": summary, "details": []}
     except Exception as e:
+        details = extract_script_errors(_gmat_root_cache) if _gmat_root_cache else []
         return {
-            "success": False,
-            "stage": "run",
+            "success": False, "stage": "run",
             "error": f"任务执行异常: {str(e)}",
-            "summary": ""
+            "summary": "", "details": details,
         }
 
 
@@ -386,6 +608,26 @@ def main():
         "--report", "-r", default="",
         help="ReportFile 输出路径 (相对于 GMAT output/ 目录)"
     )
+    parser.add_argument(
+        "--validate", "-V", action="store_true",
+        help="通过 GmatConsole 预检脚本语法后再执行"
+    )
+    parser.add_argument(
+        "--validate-only", action="store_true",
+        help="仅运行 GmatConsole 预检，不执行 API 运行"
+    )
+    parser.add_argument(
+        "--var", "-D", action="append", default=[],
+        help="模板变量替换: KEY=VALUE (可多次指定, 替换脚本中 {{KEY}} 占位符)"
+    )
+    parser.add_argument(
+        "--no-cleanup", action="store_true",
+        help="保留模板替换生成的临时脚本文件 (调试用)"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="输出进度信息到 stderr (默认静默，JSON 输出不混入诊断)"
+    )
 
     args = parser.parse_args()
 
@@ -402,39 +644,89 @@ def main():
         sys.exit(1)
 
     output_dir = config.get("output_dir", os.path.join(gmat_root, "output"))
-
     result = {"success": False, "stage": "unknown", "error": "", "objects": {}, "reports": {}}
+    _messages = []  # 诊断信息收集 (始终在 JSON 中返回)
 
-    # Step 1: 初始化 GMAT
+    def _log(msg: str):
+        _messages.append(msg)
+        if args.verbose:
+            print(f"[{result.get('stage','info')}] {msg}", file=sys.stderr)
+
+    # --- Step 0: 模板参数化 ---
+    script_to_run = args.script
+    tmp_script_path = ""
+    template_vars = {}
+    if args.var:
+        for kv in args.var:
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                template_vars[k.strip()] = v.strip()
+        if template_vars:
+            tmp_script_path = apply_template(args.script, template_vars)
+            script_to_run = tmp_script_path
+            _log(f"Template variables applied: {template_vars}")
+            _log(f"Generated temporary script: {tmp_script_path}")
+
+    # --- Step 0.5: GmatConsole 校验 (可选) ---
+    if args.validate or args.validate_only:
+        _log("Running GmatConsole pre-check...")
+        val_result = validate_script(script_to_run, gmat_root)
+        if not val_result["valid"]:
+            _log("Validation FAILED")
+            for e in val_result["errors"]:
+                _log(f"  Line {e['line']}: {e['message']}")
+        else:
+            _log("Validation PASSED")
+        result["_validation"] = {
+            "valid": val_result["valid"],
+            "errors": val_result["errors"],
+            "status_line": val_result.get("status_line", ""),
+        }
+
+    if args.validate_only:
+        result["success"] = result["_validation"]["valid"]
+        result["stage"] = "validate"
+        _print_result(result, _messages)
+        _cleanup_template(tmp_script_path, args.no_cleanup)
+        sys.exit(0 if result["success"] else 1)
+
+    # --- Step 1: 初始化 GMAT ---
     init_result = init_gmat(gmat_root)
     if not init_result["success"]:
         result.update(init_result)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        _print_result(result, _messages)
+        _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
-    # Step 2: 加载脚本
-    load_result = load_script(args.script)
+    # --- Step 2: 加载脚本 ---
+    _suppress_gmat_output()
+    load_result = load_script(script_to_run, gmat_root)
+    _restore_stdout()
     if not load_result["success"]:
         result.update(load_result)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        _print_result(result, _messages)
+        _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
-    # Step 3: 执行
+    # --- Step 3: 执行 ---
+    _suppress_gmat_output()
     run_result = run_mission()
+    _restore_stdout()
     if not run_result["success"]:
         result.update(run_result)
         result["stage"] = "run"
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        _print_result(result, _messages)
+        _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
     result["summary"] = run_result.get("summary", "")
 
-    # Step 4: 读取结果
+    # --- Step 4: 读取结果 ---
     obj_names = [n.strip() for n in args.objects.split(",") if n.strip()]
     result["objects"] = read_objects(obj_names)
     result["stage"] = "read"
 
-    # Step 5: 解析报告文件 (如果指定)
+    # --- Step 5: 解析报告文件 ---
     if args.report:
         report_full_path = os.path.join(output_dir, args.report)
         result["reports"] = parse_report_file(report_full_path)
@@ -445,7 +737,27 @@ def main():
         result["reports"] = parse_report_file(auto_report)
 
     result["success"] = True
+    result["_messages"] = _messages
+    _print_result(result, _messages)
+
+    # 清理临时文件
+    _cleanup_template(tmp_script_path, args.no_cleanup)
+
+
+def _print_result(result: dict, messages: list):
+    """注入诊断消息到结果并打印 JSON"""
+    if messages:
+        result["_messages"] = messages
     print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+def _cleanup_template(tmp_path: str, keep: bool = False):
+    """清理模板替换产生的临时脚本文件"""
+    if tmp_path and os.path.isfile(tmp_path) and not keep:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
