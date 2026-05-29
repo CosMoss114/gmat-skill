@@ -42,8 +42,8 @@ gmat_root: "D:\\你的路径\\gmat-win-R2026a"   # ← 你的 GMAT 安装目录
 ### 2. 运行测试
 
 ```powershell
-python assets/python_runner.py `
-  --script assets/templates/simple_propagation.script `
+python scripts/runner/python_runner.py `
+  --script references/templates/simple_propagation.script `
   --objects Sat
 ```
 
@@ -99,16 +99,16 @@ output_dir: "{gmat_root}\\output"
 
 ```powershell
 # 最简用法（自动读取配置）
-python python_runner.py --script mission.script
+python scripts/runner/python_runner.py --script mission.script
 
 # 读取指定对象的结果
-python python_runner.py --script mission.script --objects "Sat,Sat2"
+python scripts/runner/python_runner.py --script mission.script --objects "Sat,Sat2"
 
 # 手动覆盖 GMAT 路径
-python python_runner.py --script mission.script --gmat-root "D:\other-gmat"
+python scripts/runner/python_runner.py --script mission.script --gmat-root "D:\other-gmat"
 
 # 指定自定义配置文件
-python python_runner.py --script mission.script --config my_config.yaml
+python scripts/runner/python_runner.py --script mission.script --config my_config.yaml
 ```
 
 ### 输出格式
@@ -164,10 +164,12 @@ OFI.ShowPlot = true;
 
 | 任务描述 | 模板文件 |
 |----------|----------|
-| 简单轨道传播（3 天） | `assets/templates/simple_propagation.script` |
-| 参数化传播（命令行可调） | `assets/templates/parameterized_propagation.script` |
-| Hohmann 转移目标求解 | `assets/templates/impulsive_targeting.script` |
-| 连续小推力推进 | `assets/templates/finite_burn.script` |
+| 简单轨道传播（3 天） | `references/templates/simple_propagation.script` |
+| 参数化传播（命令行可调） | `references/templates/parameterized_propagation.script` |
+| Hohmann 转移目标求解 | `references/templates/impulsive_targeting.script` |
+| 连续小推力推进 | `references/templates/finite_burn.script` |
+
+另有 19 个精选 GMAT 官方示例 — 参见 [`references/samples/INDEX.md`](references/samples/INDEX.md)。
 
 VS Code Chat 中的示例提示：
 
@@ -185,7 +187,7 @@ VS Code Chat 中的示例提示：
 脚本中使用 `{{KEY}}` 占位符，通过 `--var` / `-D` 传入：
 
 ```powershell
-python python_runner.py --script templates/parameterized_propagation.script \
+python scripts/runner/python_runner.py --script references/templates/parameterized_propagation.script `
   -D SMA=7200 -D INC=60 -D DURATION=7 --objects Sat
 ```
 
@@ -195,10 +197,10 @@ python python_runner.py --script templates/parameterized_propagation.script \
 
 ```powershell
 # 仅校验
-python python_runner.py --script test.script --validate-only
+python scripts/runner/python_runner.py --script test.script --validate-only
 
 # 校验 + 执行
-python python_runner.py --script test.script --validate --objects Sat
+python scripts/runner/python_runner.py --script test.script --validate --objects Sat
 ```
 
 ### 错误诊断
@@ -216,9 +218,9 @@ python python_runner.py --script test.script --validate --objects Sat
 | `maneuver_detector.py` | 轨道周期平滑 SMA 跳跃检测，已滤除 J2 假阳性 |
 
 ```powershell
-python oem_reader.py CSS_OEM.dat
-python plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
-python maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
+python scripts/analysis/oem_reader.py CSS_OEM.dat
+python scripts/analysis/plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
+python scripts/analysis/maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
 ```
 
 ## 发射窗口预测
@@ -232,10 +234,10 @@ python maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
 
 ```powershell
 # 神舟（酒泉）
-python launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
+python scripts/prediction/launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
 
 # 天舟（文昌）
-python launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
+python scripts/prediction/launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
 ```
 
 **验证**：神舟23号（2026年5月24日 23:08 BJT）唯一有效窗口为降轨过顶，峰值 79.1°，AOS 23:06 BJT，与实际 T0 误差 2 分钟以内。
@@ -247,19 +249,32 @@ gmat-agent/
 ├── SKILL.md                    # Skill 定义（VS Code）
 ├── README.md                   # 英文文档
 ├── README_CN.md                # 本文件（中文文档）
-└── assets/
-    ├── system_prompt.txt       # LLM 系统提示词（GMAT 脚本语法参考）
-    ├── python_runner.py        # Python 包装器: 加载 → 执行 → 读取结果
-    ├── oem_reader.py           # OEM 解析器: CCSDS OEM v2.0 → Cartesian → Keplerian
-    ├── plot_altitude.py        # 高度绘图: 近/远地点时间序列
-    ├── maneuver_detector.py    # 变轨检测: 轨道周期平滑 SMA 跳跃检测
-    ├── launch_window.py        # 发射窗口计算: 空间站过顶预测
-    ├── default_config.yaml     # 唯一配置入口
-    └── templates/
-        ├── simple_propagation.script
-        ├── parameterized_propagation.script  # {{KEY}} 模板占位符
-        ├── impulsive_targeting.script
-        └── finite_burn.script
+├── gmat-triage.instructions.md # 分流决策树（5 层路由）
+├── assets/                     # 仅配置与提示词
+│   ├── system_prompt.txt       # LLM 系统提示词（GMAT 脚本语法参考）
+│   └── default_config.yaml     # 唯一配置入口
+├── scripts/                    # Python 工具链
+│   ├── runner/
+│   │   └── python_runner.py    # 核心引擎: 加载 → 执行 → 读取结果
+│   ├── analysis/
+│   │   ├── oem_reader.py       # OEM 解析器: CCSDS OEM v2.0 → Keplerian
+│   │   ├── plot_altitude.py    # 高度绘图: 近/远地点时间序列
+│   │   └── maneuver_detector.py # 变轨检测: 轨道周期平滑 SMA 跳跃检测
+│   └── prediction/
+│       └── launch_window.py    # 发射窗口计算: 空间站过顶预测
+└── references/                 # 参考脚本
+    ├── templates/              # 4 个可运行模板
+    │   ├── simple_propagation.script
+    │   ├── parameterized_propagation.script  # {{KEY}} 模板占位符
+    │   ├── impulsive_targeting.script
+    │   └── finite_burn.script
+    └── samples/                # 19 个精选 GMAT 官方示例
+        ├── INDEX.md
+        ├── propagation/        # 轨道传播（6）
+        ├── maneuver-transfer/  # 变轨与转移（5）
+        ├── navigation/         # 导航与估计（3）
+        ├── attitude/           # 姿态（3）
+        └── optimal-control/    # 最优控制（2）
 ```
 
 ## 已验证的脚本规则
@@ -283,7 +298,7 @@ gmat-agent/
 |------|----------|
 | `stage: "config"` 错误 | 检查 `default_config.yaml` 中的 `gmat_root` |
 | `stage: "init"` 错误 | 确认 GMAT bin/ 下有 `gmatpy.pyd`。如需要先运行 `BuildApiStartupFile.py` |
-| `stage: "load"` 错误 | 脚本语法错误。常见：ReportFile 行多了分号、`RF.Add` 参数名错误 |
+| `stage: "load"` 错误 | 脚本语法错误。常见：ReportFile 行缺少分号、`RF.Add` 参数名错误 |
 | `stage: "run"` 错误 | 物理配置问题。检查：点质量是否正确？`DateFormat` 是否在 `Epoch` 之前？ |
 | 轨道发散（双曲线） | 移除 `PointMasses`，仅用地球中心引力 |
 | `ModuleNotFoundError: gmatpy` | 将 GMAT `bin/` 加入 `PYTHONPATH`，或从能找到 gmatpy 的目录运行 |

@@ -549,7 +549,9 @@ def load_config(config_path: str = None) -> dict:
     支持 {gmat_root} 占位符自动替换。
     """
     if config_path is None:
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_config.yaml")
+        # default_config.yaml 在 assets/ 目录下，从 scripts/runner/ 向上两级
+        assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets")
+        config_path = os.path.join(assets_dir, "default_config.yaml")
 
     if not os.path.exists(config_path):
         return {}
