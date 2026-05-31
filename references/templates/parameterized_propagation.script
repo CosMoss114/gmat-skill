@@ -1,6 +1,7 @@
 %% Parameterized Propagation Template
-%% Use --var to override: SMA, ECC, INC, EPOCH, DURATION
-%% Example: -D SMA=7200 -D INC=60 -D DURATION=7
+%% Use --var / -D to override any variable. Omitted variables use defaults below.
+%% Defaults: SMA=6600 ECC=0.01 INC=45 RAAN=0 AOP=0 TA=180 DRYMASS=850 EPOCH='01 Jan 2025 12:00:00.000' DURATION=3
+%% Example (override SMA, INC, DURATION): -D SMA=7200 -D INC=60 -D DURATION=7
 
 Create Spacecraft Sat;
 Sat.DateFormat = UTCGregorian;

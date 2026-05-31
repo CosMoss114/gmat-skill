@@ -6,8 +6,9 @@ __pycache__/
 
 # GMAT runtime output (user-specific)
 output/
-*.txt
-!assets/**/*.txt
+
+# Downloaded OEM data and generated outputs (runtime artifacts)
+data/
 
 # IDE
 .vscode/

@@ -104,33 +104,42 @@ python scripts/runner/python_runner.py --script mission.script
 # 读取指定对象的结果
 python scripts/runner/python_runner.py --script mission.script --objects "Sat,Sat2"
 
-# 手动覆盖 GMAT 路径
-python scripts/runner/python_runner.py --script mission.script --gmat-root "D:\other-gmat"
-
-# 指定自定义配置文件
-python scripts/runner/python_runner.py --script mission.script --config my_config.yaml
+# CSV / Markdown 输出（默认 JSON）
+python scripts/runner/python_runner.py --script mission.script --objects Sat --format csv
+python scripts/runner/python_runner.py --script mission.script --objects Sat --format markdown
 ```
 
 ### 输出格式
+
+默认 JSON（也支持 `--format csv|markdown`）：
 
 ```json
 {
   "success": true,
   "stage": "read",
   "error": "",
-  "summary": "...",
   "objects": {
     "Sat": { "SMA": 7094.9, "ECC": 0.011, "INC": 44.9 }
   },
   "reports": {
     "columns": ["Sat.X", "Sat.Y", "Sat.Z"],
-    "data": [[7100.0, 0.0, 1300.0], ...],
-    "summary": { "num_rows": 1948 }
+    "data": [[7100.0, 0.0, 1300.0], ...]
   }
 }
 ```
 
-错误阶段：`config` → `init` → `load` → `run` → `read`。当 `success: false` 时，查看 `stage` 和 `error` 字段定位问题。
+错误阶段：`config` → `init` → `load` → `run` → `read`。
+
+## 测试
+
+运行冒烟测试验证核心管线：
+
+```powershell
+python scripts/test/smoke_test.py            # 全部测试
+python scripts/test/smoke_test.py --verbose  # 详细输出
+```
+
+覆盖：简单传播、参数化传播、脚本校验、错误诊断、OEM 解析。
 
 ## GUI 兼容性
 
@@ -169,8 +178,6 @@ OFI.ShowPlot = true;
 | Hohmann 转移目标求解 | `references/templates/impulsive_targeting.script` |
 | 连续小推力推进 | `references/templates/finite_burn.script` |
 
-另有 19 个精选 GMAT 官方示例 — 参见 [`references/samples/INDEX.md`](references/samples/INDEX.md)。
-
 VS Code Chat 中的示例提示：
 
 - *"仿真一颗 500km 高度的近地轨道卫星 3 天"*
@@ -187,7 +194,7 @@ VS Code Chat 中的示例提示：
 脚本中使用 `{{KEY}}` 占位符，通过 `--var` / `-D` 传入：
 
 ```powershell
-python scripts/runner/python_runner.py --script references/templates/parameterized_propagation.script `
+python scripts/runner/python_runner.py --script references/templates/parameterized_propagation.script \
   -D SMA=7200 -D INC=60 -D DURATION=7 --objects Sat
 ```
 
@@ -207,6 +214,40 @@ python scripts/runner/python_runner.py --script test.script --validate --objects
 
 `load_script()` 或 `run_mission()` 失败时，自动从 `GmatLog.txt` 提取行号级错误；日志为空时降级至 `GmatConsole` 获取带行号的详细诊断。
 
+## OEM 数据获取
+
+自动从 [cmse.gov.cn](https://www.cmse.gov.cn/gfgg/zgkjzgdcs/) 下载最新的 CSS 轨道数据：
+
+```powershell
+# 全量下载（文件名去重）
+python scripts/fetch/fetch_oem.py
+
+# 预览（不下载）
+python scripts/fetch/fetch_oem.py --dry-run
+
+# JSON 输出
+python scripts/fetch/fetch_oem.py --json
+```
+
+数据存储在 `data/oem/`。每次运行下载新文件，跳过已缓存的文件。
+
+## 参数扫描
+
+批量扫描轨道参数并自动汇总结果：
+
+```powershell
+# 单参数扫描：SMA 6600→7600 km，步长 200
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:200 --objects Sat
+
+# 网格扫描：SMA × 倾角
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:1000 -p INC=0:90:45
+
+# 输出 CSV + 趋势图
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:200 --csv results.csv --plot trend.png
+```
+
+输出终端表格（SMA/ECC/周期/近远地点），支持 `--csv`、`--json-output` 和 `--plot`（需 matplotlib）。
+
 ## OEM 管线 — 中国空间站轨道分析
 
 三个工具处理 CCSDS OEM v2.0 格式星历：
@@ -215,12 +256,16 @@ python scripts/runner/python_runner.py --script test.script --validate --objects
 |------|------|
 | `oem_reader.py` | 解析 OEM → Cartesian → Keplerian（纯 numpy，不依赖 GMAT） |
 | `plot_altitude.py` | 三面板高度图：近/远地点、SMA+趋势、偏心率 |
-| `maneuver_detector.py` | 轨道周期平滑 SMA 跳跃检测，已滤除 J2 假阳性 |
+| `maneuver_detector.py` | 双模式检测：化学推力（脉冲）+ 霍尔/电推（连续），10-bin 趋势分析 |
 
 ```powershell
-python scripts/analysis/oem_reader.py CSS_OEM.dat
-python scripts/analysis/plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
-python scripts/analysis/maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
+python oem_reader.py CSS_OEM.dat
+python plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
+# 变轨检测（自动阈值，双模式）
+python maneuver_detector.py CSS_OEM.dat
+
+# JSON 输出供程序调用
+python maneuver_detector.py CSS_OEM.dat --json
 ```
 
 ## 发射窗口预测
@@ -234,10 +279,10 @@ python scripts/analysis/maneuver_detector.py CSS_OEM.dat --step 200 --threshold 
 
 ```powershell
 # 神舟（酒泉）
-python scripts/prediction/launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
+python launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
 
 # 天舟（文昌）
-python scripts/prediction/launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
+python launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
 ```
 
 **验证**：神舟23号（2026年5月24日 23:08 BJT）唯一有效窗口为降轨过顶，峰值 79.1°，AOS 23:06 BJT，与实际 T0 误差 2 分钟以内。
@@ -249,32 +294,32 @@ gmat-agent/
 ├── SKILL.md                    # Skill 定义（VS Code）
 ├── README.md                   # 英文文档
 ├── README_CN.md                # 本文件（中文文档）
-├── gmat-triage.instructions.md # 分流决策树（5 层路由）
-├── assets/                     # 仅配置与提示词
+├── gmat-triage.instructions.md # 五层分流决策树
+├── assets/                     # 纯配置与声明性内容
 │   ├── system_prompt.txt       # LLM 系统提示词（GMAT 脚本语法参考）
 │   └── default_config.yaml     # 唯一配置入口
-├── scripts/                    # Python 工具链
+├── scripts/                    # 所有可执行 Python 工具
+│   ├── fetch/
+│   │   └── fetch_oem.py        # OEM 数据获取（从 cmse.gov.cn）
 │   ├── runner/
 │   │   └── python_runner.py    # 核心引擎: 加载 → 执行 → 读取结果
+│   │                           #   + --validate, --var, 错误诊断
 │   ├── analysis/
-│   │   ├── oem_reader.py       # OEM 解析器: CCSDS OEM v2.0 → Keplerian
+│   │   ├── oem_reader.py       # OEM 解析器: CCSDS OEM v2.0 → Cartesian → Keplerian
 │   │   ├── plot_altitude.py    # 高度绘图: 近/远地点时间序列
-│   │   └── maneuver_detector.py # 变轨检测: 轨道周期平滑 SMA 跳跃检测
+│   │   ├── maneuver_detector.py # 变轨检测: 10-bin趋势 + 脉冲/连续双模式
+│   │   └── parameter_scan.py   # 参数扫描: 批量传播 + 汇总表/趋势图
 │   └── prediction/
 │       └── launch_window.py    # 发射窗口计算: 空间站过顶预测
-└── references/                 # 参考脚本
-    ├── templates/              # 4 个可运行模板
+├── data/
+│   └── oem/                    # 下载的 OEM 数据（fetch_oem.py 自动填充）
+└── references/                 # 只读参考材料
+    ├── templates/
     │   ├── simple_propagation.script
-    │   ├── parameterized_propagation.script  # {{KEY}} 模板占位符
+    │   ├── parameterized_propagation.script  # {{KEY}} 模板占位符（含默认值）
     │   ├── impulsive_targeting.script
     │   └── finite_burn.script
-    └── samples/                # 19 个精选 GMAT 官方示例
-        ├── INDEX.md
-        ├── propagation/        # 轨道传播（6）
-        ├── maneuver-transfer/  # 变轨与转移（5）
-        ├── navigation/         # 导航与估计（3）
-        ├── attitude/           # 姿态（3）
-        └── optimal-control/    # 最优控制（2）
+    └── samples/                # 19 个精选官方 GMAT 示例 + INDEX.md
 ```
 
 ## 已验证的脚本规则
@@ -298,18 +343,20 @@ gmat-agent/
 |------|----------|
 | `stage: "config"` 错误 | 检查 `default_config.yaml` 中的 `gmat_root` |
 | `stage: "init"` 错误 | 确认 GMAT bin/ 下有 `gmatpy.pyd`。如需要先运行 `BuildApiStartupFile.py` |
-| `stage: "load"` 错误 | 脚本语法错误。常见：ReportFile 行缺少分号、`RF.Add` 参数名错误 |
+| `stage: "load"` 错误 | 脚本语法错误。常见：ReportFile 行多了分号、`RF.Add` 参数名错误 |
 | `stage: "run"` 错误 | 物理配置问题。检查：点质量是否正确？`DateFormat` 是否在 `Epoch` 之前？ |
 | 轨道发散（双曲线） | 移除 `PointMasses`，仅用地球中心引力 |
 | `ModuleNotFoundError: gmatpy` | 将 GMAT `bin/` 加入 `PYTHONPATH`，或从能找到 gmatpy 的目录运行 |
 
 ## 已知限制
 
-- **MVP 范围**：传播 + 机动 + 目标求解。不含轨道确定、不含实时可视化
-- **仅 Python API**：不使用 GMAT GUI（`GMAT.exe`），不直接调用 `GmatConsole.exe`
+- **MVP 范围**：传播 + 机动 + 目标求解。不含轨道确定
+- **自动执行仅用 Python API**：Agent 通过 `python_runner.py` 驱动脚本执行，自动化流程中不启动 `GMAT.exe` 或 `GmatConsole.exe`。但生成的所有 `.script` 文件均为标准 GMAT 格式，可在 GUI 中打开进行 3D 可视化
+- **复杂任务工作流**：对非平凡任务，Agent 先通过 Python API 迭代验证（快速、可自动纠错），通过后提供含 `OpenFramesInterface` 的 GUI 版本供用户可视化确认
 - **无自动迭代循环**：LLM 每次生成一个脚本，多轮优化需手动进行
 - **ReportFile 参数**：`RF.Add` 仅支持 Cartesian 参数。Keplerian 根数需通过 `GetRuntimeObject().GetNumber()` 读取
 - **第三天体引力**：点质量（太阳、月球）在 API 模式下可能有问题
+- **模板参数化**：`parameterized_propagation.script` 支持 `{{KEY}}` 占位符并内置默认值（编辑 `%% Defaults:` 注释行可修改）。未提供的变量自动使用默认值填充 — 可放心只覆盖需要的变量（如 `-D SMA=7200`）。其他模板（`simple_propagation.script`、`impulsive_targeting.script`、`finite_burn.script`）使用固定值，不支持 `-D`
 
 ## 许可证
 

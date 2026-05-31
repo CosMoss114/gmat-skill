@@ -42,8 +42,8 @@ Or set the `GMAT_ROOT` environment variable (optional override).
 ### 2. Run a Test
 
 ```powershell
-python scripts/runner/python_runner.py ^
-  --script references/templates/simple_propagation.script ^
+python scripts/runner/python_runner.py \
+  --script references/templates/simple_propagation.script \
   --objects Sat
 ```
 
@@ -104,33 +104,42 @@ python scripts/runner/python_runner.py --script mission.script
 # Read specific objects after execution
 python scripts/runner/python_runner.py --script mission.script --objects "Sat,Sat2"
 
-# Override GMAT path
-python scripts/runner/python_runner.py --script mission.script --gmat-root "D:\other-gmat"
-
-# Custom config file
-python scripts/runner/python_runner.py --script mission.script --config my_config.yaml
+# CSV / Markdown output (default: JSON)
+python scripts/runner/python_runner.py --script mission.script --objects Sat --format csv
+python scripts/runner/python_runner.py --script mission.script --objects Sat --format markdown
 ```
 
 ### Output Format
+
+Default JSON (also supports `--format csv|markdown`):
 
 ```json
 {
   "success": true,
   "stage": "read",
   "error": "",
-  "summary": "...",
   "objects": {
     "Sat": { "SMA": 7094.9, "ECC": 0.011, "INC": 44.9 }
   },
   "reports": {
     "columns": ["Sat.X", "Sat.Y", "Sat.Z"],
-    "data": [[7100.0, 0.0, 1300.0], ...],
-    "summary": { "num_rows": 1948 }
+    "data": [[7100.0, 0.0, 1300.0], ...]
   }
 }
 ```
 
-Error stages: `config` → `init` → `load` → `run` → `read`. When `success: false`, check the `stage` and `error` fields.
+Error stages: `config` → `init` → `load` → `run` → `read`.
+
+## Testing
+
+Run smoke tests to verify core pipeline integrity:
+
+```powershell
+python scripts/test/smoke_test.py            # all tests
+python scripts/test/smoke_test.py --verbose  # detailed output
+```
+
+Covers: simple propagation, parameterized propagation, script validation, error diagnostics, OEM parsing.
 
 ## GUI Compatibility
 
@@ -169,7 +178,7 @@ OFI.ShowPlot = true;
 Use `{{KEY}}` placeholders in scripts and override with `--var` / `-D`:
 
 ```powershell
-python scripts/runner/python_runner.py --script references/templates/parameterized_propagation.script ^
+python scripts/runner/python_runner.py --script references/templates/parameterized_propagation.script \
   -D SMA=7200 -D INC=60 -D DURATION=7 --objects Sat
 ```
 
@@ -189,6 +198,40 @@ python scripts/runner/python_runner.py --script test.script --validate --objects
 
 When `load_script()` or `run_mission()` fails, `python_runner.py` automatically extracts line-level error messages from `GmatLog.txt` or falls back to `GmatConsole` for detailed diagnostics. Errors include exact line numbers and field names.
 
+## OEM Data Fetching
+
+Automatically download the latest CSS orbital data from [cmse.gov.cn](https://www.cmse.gov.cn/gfgg/zgkjzgdcs/):
+
+```powershell
+# Full download (dedup by filename)
+python scripts/fetch/fetch_oem.py
+
+# Preview only (no download)
+python scripts/fetch/fetch_oem.py --dry-run
+
+# JSON output
+python scripts/fetch/fetch_oem.py --json
+```
+
+Data is stored in `data/oem/`. Each run downloads new files and skips already-cached ones.
+
+## Parameter Scanning
+
+Batch-scan orbital parameters and automatically summarize results:
+
+```powershell
+# Single parameter: SMA 6600→7600 km, step 200
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:200 --objects Sat
+
+# Grid scan: SMA × Inclination
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:1000 -p INC=0:90:45
+
+# Output to CSV + trend plot
+python scripts/analysis/parameter_scan.py -p SMA=6600:7600:200 --csv results.csv --plot trend.png
+```
+
+Outputs a terminal table with SMA, ECC, period, perigee/apogee. Supports `--csv`, `--json-output`, and `--plot` (requires matplotlib).
+
 ## OEM Pipeline — CSS Orbit Analysis
 
 Three tools for processing CCSDS OEM v2.0 files (e.g., China Space Station ephemeris):
@@ -197,17 +240,21 @@ Three tools for processing CCSDS OEM v2.0 files (e.g., China Space Station ephem
 |------|---------|
 | `oem_reader.py` | Parse OEM → Cartesian states → Keplerian elements (numpy, no GMAT API) |
 | `plot_altitude.py` | 3-panel altitude time series: Perigee/Apogee, SMA+trend, Eccentricity |
-| `maneuver_detector.py` | Orbit-period-smoothed SMA jump detection with J2 oscillation filtering |
+| `maneuver_detector.py` | Dual-mode detection: impulsive (chemical) + continuous (Hall/EP) thrust via 10-bin trend analysis |
 
 ```powershell
 # Quick orbit summary
-python scripts/analysis/oem_reader.py CSS_OEM.dat
+python oem_reader.py CSS_OEM.dat
 
 # Altitude visualization
-python scripts/analysis/plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
+python plot_altitude.py CSS_OEM.dat -o altitude.png --step 4
 
 # Maneuver detection (orbit-period smoothing to avoid J2 false positives)
-python scripts/analysis/maneuver_detector.py CSS_OEM.dat --step 200 --threshold 5.0 --window 24
+# Maneuver detection (auto-threshold, dual-mode)
+python maneuver_detector.py CSS_OEM.dat
+
+# JSON output for programmatic use
+python maneuver_detector.py CSS_OEM.dat --json
 ```
 
 ## Launch Window Prediction
@@ -221,13 +268,13 @@ python scripts/analysis/maneuver_detector.py CSS_OEM.dat --step 200 --threshold 
 
 ```powershell
 # Shenzhou from Jiuquan
-python scripts/prediction/launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
+python launch_window.py CSS_OEM.dat -s Jiuquan --t0 "2026-05-24T23:08:36+08:00" -e 60
 
 # Tianzhou from Wenchang (future prediction)
-python scripts/prediction/launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
+python launch_window.py CSS_OEM.dat -s Wenchang -e 60 -w 24
 
 # JSON output for scripts
-python scripts/prediction/launch_window.py CSS_OEM.dat -s Jiuquan --json
+python launch_window.py CSS_OEM.dat -s Jiuquan --json
 ```
 
 **Verified**: Shenzhou-23 (launched May 24, 2026 at 23:08 BJT) — the only valid window detected is a descending pass peaking at 79.1° elevation with AOS at 23:06 BJT, matching the actual T0 within 2 minutes.
@@ -240,8 +287,6 @@ python scripts/prediction/launch_window.py CSS_OEM.dat -s Jiuquan --json
 | Parameterized propagation (CLI vars) | `references/templates/parameterized_propagation.script` |
 | Hohmann transfer targeting | `references/templates/impulsive_targeting.script` |
 | Continuous low-thrust | `references/templates/finite_burn.script` |
-
-19 curated GMAT official samples also available — see [`references/samples/INDEX.md`](references/samples/INDEX.md).
 
 Example prompts for VS Code Chat:
 
@@ -257,32 +302,32 @@ gmat-agent/
 ├── SKILL.md                    # Skill definition (VS Code)
 ├── README.md                   # This file (English)
 ├── README_CN.md                # Chinese documentation
-├── gmat-triage.instructions.md # Triage decision tree (5-layer routing)
-├── assets/                     # Config & prompts only
+├── gmat-triage.instructions.md # 5-layer decision tree
+├── assets/                     # Declarative config + LLM prompts
 │   ├── system_prompt.txt       # LLM system prompt (GMAT scripting reference)
 │   └── default_config.yaml     # Single configuration point
-├── scripts/                    # Python toolchain
+├── scripts/                    # All executable Python tools
+│   ├── fetch/
+│   │   └── fetch_oem.py        # OEM data fetcher from cmse.gov.cn
 │   ├── runner/
 │   │   └── python_runner.py    # Core engine: load → execute → read results
+│   │                           #   + --validate, --var, error diagnostics
 │   ├── analysis/
-│   │   ├── oem_reader.py       # OEM parser: CCSDS OEM v2.0 → Keplerian
+│   │   ├── oem_reader.py       # OEM parser: CCSDS OEM v2.0 → Cartesian → Keplerian
 │   │   ├── plot_altitude.py    # Altitude plotter: perigee/apogee time series
-│   │   └── maneuver_detector.py # Maneuver detector: orbit-smoothed SMA jump
+│   │   ├── maneuver_detector.py # Maneuver detector: 10-bin trend, dual-mode (impulsive + continuous)
+│   │   └── parameter_scan.py   # Parameter scanner: batch propagation + summary table/plot
 │   └── prediction/
 │       └── launch_window.py    # Launch window calculator for CSS missions
-└── references/                 # Reference scripts
-    ├── templates/              # 4 runnable templates
+├── data/
+│   └── oem/                    # Downloaded OEM data (auto-populated by fetch_oem.py)
+└── references/                 # Read-only reference material
+    ├── templates/
     │   ├── simple_propagation.script
-    │   ├── parameterized_propagation.script  # {{KEY}} template vars
+    │   ├── parameterized_propagation.script  # {{KEY}} template vars with defaults
     │   ├── impulsive_targeting.script
     │   └── finite_burn.script
-    └── samples/                # 19 curated GMAT official examples
-        ├── INDEX.md
-        ├── propagation/        # (6 scripts)
-        ├── maneuver-transfer/  # (5 scripts)
-        ├── navigation/         # (3 scripts)
-        ├── attitude/           # (3 scripts)
-        └── optimal-control/    # (2 scripts)
+    └── samples/                # 19 curated official GMAT examples + INDEX.md
 ```
 
 ## Verified Scripting Rules
@@ -306,18 +351,20 @@ These were discovered through live testing against GMAT's Python API and GmatCon
 |---------|----------|
 | `stage: "config"` error | Check `gmat_root` in `default_config.yaml` |
 | `stage: "init"` error | Verify GMAT bin/ contains `gmatpy.pyd`. Run `BuildApiStartupFile.py` first if needed. |
-| `stage: "load"` error | Script syntax error. Check the error message for specifics. Common: missing semicolons on ReportFile lines, wrong parameter names in `RF.Add`. |
+| `stage: "load"` error | Script syntax error. Check the error message for specifics. Common: semicolons after ReportFile lines, wrong parameter names in `RF.Add`. |
 | `stage: "run"` error | Physics or configuration issue. Check: are point masses correct? Is `DateFormat` set before `Epoch`? |
 | Orbit diverges (hyperbolic) | Remove `PointMasses`, use Earth-only gravity for MVP. |
 | `ModuleNotFoundError: gmatpy` | Add GMAT `bin/` to `PYTHONPATH` or run from a directory where `sys.path` can reach it. |
 
 ## Limitations
 
-- **MVP scope**: Propagation + Maneuvers + Targeting. No Orbit Determination, no real-time visualization.
-- **Python API only**: No GMAT GUI (`GMAT.exe`), no `GmatConsole.exe` direct execution.
+- **MVP scope**: Propagation + Maneuvers + Targeting. No Orbit Determination.
+- **Automated execution uses Python API only**: The agent runs scripts via `python_runner.py` — no `GMAT.exe` or `GmatConsole.exe` direct execution during automated workflows. However, all generated `.script` files are standard GMAT format and can be opened in the GUI for 3D visualization.
+- **Complex task workflow**: For non-trivial tasks, the agent iterates and validates via Python API first, then provides a GUI-ready version with `OpenFramesInterface` for user visualization.
 - **No automatic iteration loop**: The LLM generates one script at a time. Multi-turn refinement is manual.
 - **ReportFile parameters**: Only Cartesian frame parameters in `RF.Add`. Keplerian elements must be read via `GetRuntimeObject().GetNumber()`.
 - **Third-body gravity**: Point masses (Sun, Moon) may cause issues in API mode.
+- **Template parameterization**: `parameterized_propagation.script` supports `{{KEY}}` placeholders with built-in defaults (edit the `%% Defaults:` comment line to change). Omitted variables auto-fill from defaults — safe to override only the ones you need (e.g. `-D SMA=7200`). Other templates (`simple_propagation.script`, `impulsive_targeting.script`, `finite_burn.script`) have hardcoded values and don't support `-D`.
 
 ## License
 

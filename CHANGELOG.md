@@ -2,6 +2,44 @@
 
 本文档记录 GMAT Agent Skill 从首个版本至今的所有变更，包括新增功能、Bug 修复、架构调整和文档更新。
 
+## [v0.1.4] — 2026-05-31
+
+### 变轨检测 V0.3.0 — 双模式 + 趋势分析
+
+- **算法重写**: 从轨道周期平滑 + 阈值检测 → 10-bin 粗粒化趋势分析
+  - 每 bin ~17 小时，覆盖 ~11 个 J2 周期，自然消除 J2 ±7 km 振荡
+- **双模式检测**: 脉冲（化学推力器）+ 连续（霍尔/电推）
+- **dV 估计**: vis-viva 圆轨道近似；连续推力加速度 + 持续时间诊断
+
+### OEM 数据自动获取
+
+- **`scripts/fetch/fetch_oem.py`**: cmse.gov.cn 全量下载 + 文件名去重 + 自动解压
+  - `--dry-run` 预览 / `--json` 输出 / 数据存储 `data/oem/`
+
+### 参数扫描自动化
+
+- **`scripts/analysis/parameter_scan.py`**: `-p SMA=6600:7600:200` 范围扫描 + 多参数网格
+  - 终端表格 / `--csv` / `--json-output` / `--plot` (matplotlib)
+
+### 模板默认值
+
+- `parameterized_propagation.script`: `%% Defaults:` 注释行 + runner 自动解析填充
+
+### 输出格式扩展
+
+- **`python_runner.py`**: `--format csv|markdown`, 默认 `--format json` 向后兼容
+
+### CI 验证脚本
+
+- **`scripts/test/smoke_test.py`**: 简单传播 / 参数化传播 / 校验 / 错误诊断 / OEM 解析
+
+### 文档
+
+- README/README_CN: 路径更新到 V0.1.3 三层结构，新增 OEM 获取、参数扫描、测试章节
+- AGENTS.md: GMAT Python API 章节 + 15 条脚本语法规则
+- DEVGUIDE.md: V0.1.4 短期目标全部标记完成
+- SKILL.md: 文件结构引用更新
+
 ## [v0.1.3] — 2026-05-29
 
 ### 架构重组

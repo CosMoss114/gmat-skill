@@ -19,6 +19,15 @@ description: "GMAT Agent 分流决策树 — 根据用户自然语言描述确�
 
 **歧义处理**: 若用户未提及可视化，默认走非 GUI 路径。但告知用户："生成的 `.script` 文件可在 GMAT GUI 中打开查看 3D 轨道。"
 
+### 复杂任务 GUI 策略
+
+对涉及变轨、目标求解、参数扫描等复杂任务，采用**先验证后可视化**的两阶段流程：
+
+1. **迭代阶段（Python API）**：生成脚本 → `--validate` 预检 → `python_runner.py` 执行 → 检查 `success`/`objects` → 如失败则根据 `stage`/`error` 修正 → 重复直到通过
+2. **可视化阶段（GUI）**：验证通过后，在同一脚本中添加 `OpenFramesInterface` 块，告知用户"脚本已通过 API 验证，请在 GMAT GUI 中打开查看 3D 轨道"
+
+**注意**：两阶段使用**同一份脚本**，仅在可视化阶段追加 `OpenFramesInterface` 块。这样可以保证用户 GUI 中看到的与 API 验证通过的完全一致。
+
 ---
 
 ## 第 2 层：空间范围

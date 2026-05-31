@@ -302,6 +302,10 @@ def apply_template(script_path: str, variables: dict) -> str:
     """
     读取脚本文件，将 {{KEY}} 占位符替换为对应值，写入临时文件并返回路径。
 
+    支持从模板注释中解析默认值:
+        %% Defaults: SMA=6600 ECC=0.01 INC=45 EPOCH='01 Jan 2025 12:00:00.000'
+    未通过 -D 提供的变量自动使用默认值填充。
+
     示例:
         script 内容:  Sat.SMA = {{SMA}};
         调用:         apply_template("t.script", {"SMA": "7100"})
@@ -313,9 +317,32 @@ def apply_template(script_path: str, variables: dict) -> str:
     with open(script_path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
 
-    for key, value in variables.items():
+    # ---- 解析模板默认值 ----
+    # 格式: %% Defaults: KEY1=val1 KEY2='val with spaces' KEY3=42
+    defaults = {}
+    default_match = re.search(r'%%\s*Defaults\s*:\s*(.+)', content)
+    if default_match:
+        defaults_str = default_match.group(1)
+        # 匹配 KEY='value' 或 KEY=value (值可含空格如果被单引号包裹)
+        for m in re.finditer(r"(\w+)=(?:'([^']*)'|(\S+))", defaults_str):
+            key = m.group(1)
+            val = m.group(2) if m.group(2) is not None else m.group(3)
+            defaults[key] = val
+
+    # ---- 合并: 用户变量优先, 未提供的用默认值 ----
+    merged = dict(defaults)
+    merged.update(variables)
+
+    # ---- 替换所有占位符 ----
+    for key, value in merged.items():
         placeholder = "{{" + key + "}}"
         content = content.replace(placeholder, str(value))
+
+    # 检查是否有未替换的占位符
+    unreplaced = re.findall(r'\{\{(\w+)\}\}', content)
+    if unreplaced:
+        import warnings
+        warnings.warn(f"模板中以下占位符未被替换且无默认值: {unreplaced}")
 
     # 写入临时文件 (保留原文件名便于错误定位)
     dir_name = os.path.dirname(script_path)
@@ -630,6 +657,10 @@ def main():
         "--verbose", action="store_true",
         help="输出进度信息到 stderr (默认静默，JSON 输出不混入诊断)"
     )
+    parser.add_argument(
+        "--format", "-f", default="json", choices=["json", "csv", "markdown"],
+        help="输出格式: json (默认) | csv | markdown"
+    )
 
     args = parser.parse_args()
 
@@ -688,7 +719,7 @@ def main():
     if args.validate_only:
         result["success"] = result["_validation"]["valid"]
         result["stage"] = "validate"
-        _print_result(result, _messages)
+        _print_result(result, _messages, args.format)
         _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(0 if result["success"] else 1)
 
@@ -696,7 +727,7 @@ def main():
     init_result = init_gmat(gmat_root)
     if not init_result["success"]:
         result.update(init_result)
-        _print_result(result, _messages)
+        _print_result(result, _messages, args.format)
         _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
@@ -706,7 +737,7 @@ def main():
     _restore_stdout()
     if not load_result["success"]:
         result.update(load_result)
-        _print_result(result, _messages)
+        _print_result(result, _messages, args.format)
         _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
@@ -717,7 +748,7 @@ def main():
     if not run_result["success"]:
         result.update(run_result)
         result["stage"] = "run"
-        _print_result(result, _messages)
+        _print_result(result, _messages, args.format)
         _cleanup_template(tmp_script_path, args.no_cleanup)
         sys.exit(1)
 
@@ -740,17 +771,129 @@ def main():
 
     result["success"] = True
     result["_messages"] = _messages
-    _print_result(result, _messages)
+    _print_result(result, _messages, args.format)
 
     # 清理临时文件
     _cleanup_template(tmp_script_path, args.no_cleanup)
 
 
-def _print_result(result: dict, messages: list):
-    """注入诊断消息到结果并打印 JSON"""
+def _print_result(result: dict, messages: list, fmt: str = "json"):
+    """根据格式输出结果。"""
     if messages:
         result["_messages"] = messages
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    try:
+        if fmt == "csv":
+            print(format_as_csv(result))
+        elif fmt == "markdown":
+            print(format_as_markdown(result))
+        else:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+    except UnicodeEncodeError:
+        # Windows GBK 终端回退：用 ASCII 安全模式输出
+        if fmt == "markdown":
+            print(format_as_markdown(result).encode("ascii", errors="replace").decode("ascii"))
+        else:
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+
+
+def format_as_csv(result: dict) -> str:
+    """将结果格式化为 CSV 字符串。"""
+    lines = []
+
+    # objects → key,value
+    objects = result.get("objects", {})
+    if objects:
+        lines.append("section,key,value")
+        for obj_name, props in objects.items():
+            for prop, val in props.items():
+                # CSV 安全：含逗号的值加引号
+                val_str = str(val)
+                if "," in val_str or "\n" in val_str:
+                    val_str = f'"{val_str}"'
+                lines.append(f"objects,{obj_name}.{prop},{val_str}")
+
+    # reports → columns header + data rows
+    reports = result.get("reports", {})
+    if reports and "columns" in reports and "data" in reports:
+        cols = reports["columns"]
+        data_rows = reports["data"]
+        if lines:
+            lines.append("")  # 空行分隔
+        lines.append("reports," + ",".join(str(c) for c in cols))
+        for row in data_rows[:1000]:  # 最多 1000 行
+            lines.append("reports," + ",".join(str(v) for v in row))
+        if len(data_rows) > 1000:
+            lines.append(f"reports,... ({len(data_rows)} rows total, showing first 1000)")
+
+    return "\n".join(lines)
+
+
+def format_as_markdown(result: dict) -> str:
+    """将结果格式化为 Markdown 表格字符串。"""
+    lines = []
+
+    # Summary line
+    success = result.get("success", False)
+    stage = result.get("stage", "?")
+    error = result.get("error", "")
+    status = "[OK]" if success else "[FAIL]"
+    lines.append(f"**Status**: {status} `success={success}` | stage: `{stage}`")
+    if error:
+        lines.append(f"**Error**: {error}")
+    lines.append("")
+
+    # objects → table
+    objects = result.get("objects", {})
+    if objects:
+        lines.append("### Objects")
+        lines.append("")
+        # 收集所有属性名
+        all_props = []
+        for props in objects.values():
+            for p in props:
+                if p not in all_props:
+                    all_props.append(p)
+        # 优先显示常用参数
+        priority = ["SMA", "ECC", "INC", "RAAN", "AOP", "TA", "RMAG", "VMAG",
+                    "TotalMass", "DryMass", "X", "Y", "Z", "VX", "VY", "VZ"]
+        ordered = [p for p in priority if p in all_props] + \
+                  [p for p in all_props if p not in priority]
+        # 表头
+        header = "| Object | " + " | ".join(ordered) + " |"
+        sep = "|---" * (len(ordered) + 1) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for obj_name, props in objects.items():
+            vals = []
+            for p in ordered:
+                v = props.get(p, "")
+                if isinstance(v, float):
+                    vals.append(f"{v:.4g}")
+                else:
+                    vals.append(str(v))
+            lines.append(f"| {obj_name} | " + " | ".join(vals) + " |")
+        lines.append("")
+
+    # reports → table (truncated)
+    reports = result.get("reports", {})
+    if reports and "columns" in reports and "data" in reports:
+        cols = reports["columns"]
+        data_rows = reports["data"]
+        max_show = 50
+        lines.append(f"### Report ({len(data_rows)} rows)")
+        lines.append("")
+        header = "| " + " | ".join(str(c) for c in cols) + " |"
+        sep = "|---" * len(cols) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for row in data_rows[:max_show]:
+            vals = [f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
+            lines.append("| " + " | ".join(vals) + " |")
+        if len(data_rows) > max_show:
+            lines.append(f"| ... | (showing {max_show} of {len(data_rows)} rows) |")
+
+    return "\n".join(lines)
 
 
 def _cleanup_template(tmp_path: str, keep: bool = False):
