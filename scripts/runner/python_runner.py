@@ -229,6 +229,28 @@ def extract_script_errors(gmat_root: str, script_path: str = None) -> list:
 # 脚本校验: 通过 GmatConsole 子进程预检脚本
 # ==============================================================================
 
+def _check_script_ascii(script_path: str) -> list:
+    """
+    预检脚本文件是否为纯 ASCII。GMAT 解释器拒绝任何非 ASCII 字符（包括注释中的中文、em-dash 等）。
+    返回非法行列表: [{"line": int, "char": str, "col": int}, ...]
+    """
+    violations = []
+    try:
+        with open(script_path, "r", encoding="utf-8", errors="replace") as f:
+            for line_no, line in enumerate(f, 1):
+                for col, ch in enumerate(line, 1):
+                    if ord(ch) > 127:
+                        violations.append({
+                            "line": line_no,
+                            "char": ch,
+                            "codepoint": f"U+{ord(ch):04X}",
+                            "col": col,
+                        })
+    except Exception:
+        pass
+    return violations
+
+
 def validate_script(script_path: str, gmat_root: str) -> dict:
     """
     通过 GmatConsole --run --minimize 预检脚本语法。
@@ -244,15 +266,36 @@ def validate_script(script_path: str, gmat_root: str) -> dict:
     if not os.path.isfile(gmat_console):
         return {"valid": False, "errors": [{"line": 0, "message": f"GmatConsole not found: {gmat_console}"}], "raw_output": ""}
 
+    # ---- ASCII 预检 ----
+    ascii_violations = _check_script_ascii(script_path)
+    if ascii_violations:
+        lines_msg = "; ".join(
+            f"Line {v['line']}: non-ASCII '{v['char']}' ({v['codepoint']}) at col {v['col']}"
+            for v in ascii_violations[:5]
+        )
+        return {
+            "valid": False,
+            "errors": [{
+                "line": ascii_violations[0]["line"],
+                "file": os.path.basename(script_path),
+                "type": "ASCII",
+                "message": f"脚本包含非 ASCII 字符: {lines_msg}。GMAT .script 文件必须为纯 ASCII（包括注释）。请将中文标点（—、""、''）替换为 ASCII 等价字符（-、\"、'）。",
+            }],
+            "raw_output": "",
+        }
+
     script_abs = os.path.abspath(script_path)
 
     try:
         proc = subprocess.run(
             [gmat_console, "--run", script_abs, "--minimize"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, timeout=120,
             cwd=os.path.join(gmat_root, "bin"),
         )
-        output = proc.stdout + "\n" + proc.stderr
+        # 强制 UTF-8 解码，无法解码的字符用 ? 替代，避免 GBK 编码错误
+        stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+        stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        output = stdout + "\n" + stderr
 
         # 提取错误行
         errors = []
@@ -393,6 +436,19 @@ def load_script(script_path: str, gmat_root: str = "") -> dict:
         if not os.path.exists(script_path):
             return {"success": False, "stage": "load", "error": f"脚本文件不存在: {script_path}", "details": []}
 
+        # ---- ASCII 预检 ----
+        ascii_violations = _check_script_ascii(script_path)
+        if ascii_violations:
+            lines_msg = "; ".join(
+                f"Line {v['line']}: '{v['char']}' ({v['codepoint']}) at col {v['col']}"
+                for v in ascii_violations[:5]
+            )
+            return {
+                "success": False, "stage": "load",
+                "error": f"脚本包含非 ASCII 字符: {lines_msg}。GMAT .script 文件必须为纯 ASCII。请将中文标点替换为 ASCII 等价字符。",
+                "details": ascii_violations,
+            }
+
         result = gmat.LoadScript(script_path)
         if not result:
             root = gmat_root or _gmat_root_cache
@@ -461,21 +517,29 @@ def run_mission() -> dict:
 # 结果读取
 # ==============================================================================
 
-# 常用可读参数列表
+# 常用可读参数列表 (按对象类型分组，尝试读取时自动跳过不适用的参数)
 COMMON_PARAMETERS = [
+    # Spacecraft / CelestialBody
     "SMA", "ECC", "INC", "RAAN", "AOP", "TA",
     "X", "Y", "Z", "VX", "VY", "VZ",
     "RMAG", "VMAG", "Earth.Altitude",
     "Latitude", "Longitude",
     "TotalMass", "DryMass",
     "ElapsedSecs", "ElapsedDays",
+    # ImpulsiveBurn / FiniteBurn
+    "Element1", "Element2", "Element3",
+    # ChemicalThruster
+    "C1", "C2", "C3",
+    # DifferentialCorrector
+    "MaximumIterations",
 ]
 
 
 def read_object(obj_name: str) -> dict:
     """
     读取单个 GMAT 运行时对象的常用参数。
-    返回 {param_name: value, ...}
+    自动适配 Spacecraft / ImpulsiveBurn / ChemicalThruster / DifferentialCorrector 等类型。
+    返回 {param_name: value, ..., "_type": "推断类型"}
     """
     try:
         obj = gmat.GetRuntimeObject(obj_name)
@@ -491,13 +555,20 @@ def read_object(obj_name: str) -> dict:
                 pass  # 参数不存在或不是数值类型
 
         # 同时尝试读取字符串类型参数
-        for str_param in ["DateFormat", "CoordinateSystem", "DisplayStateType", "Epoch"]:
+        for str_param in ["DateFormat", "CoordinateSystem", "DisplayStateType", "Epoch",
+                          "Axes", "Origin"]:
             try:
                 val = obj.GetString(str_param)
                 if val:
                     params[str_param] = val
             except Exception:
                 pass
+
+        # 推断对象类型
+        if params.get("SMA") is not None or params.get("X") is not None:
+            params["_type"] = "Spacecraft"
+        elif params.get("Element1") is not None:
+            params["_type"] = "ImpulsiveBurn" if not params.get("C1") else "ChemicalThruster"
 
         return params
     except Exception as e:

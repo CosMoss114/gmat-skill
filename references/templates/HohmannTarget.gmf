@@ -1,0 +1,20 @@
+function [dv1, dv2, sat] = HohmannTarget(sat, prop, toi, goi, dc)
+
+Create Variable dv1 dv2;
+
+BeginMissionSequence
+
+Propagate 'To Periapsis' prop(sat) {sat.Earth.Periapsis};
+
+Target 'Hohmann Transfer' dc {SolveMode = Solve, ExitMode = SaveAndContinue};
+   Vary 'Vary TOI' dc(toi.Element1 = 1.0, {Perturbation = 0.0001, Lower = 0.1, Upper = 10.0, MaxStep = 0.5});
+   Maneuver 'Apply TOI' toi(sat);
+   Propagate 'To Apogee' prop(sat) {sat.Earth.Apoapsis};
+   Achieve 'Achieve GEO RMAG' dc(sat.Earth.RMAG = 42165, {Tolerance = 0.1});
+   Vary 'Vary GOI' dc(goi.Element1 = 0.5, {Perturbation = 0.0001, Lower = 0.1, Upper = 5.0, MaxStep = 0.2});
+   Maneuver 'Apply GOI' goi(sat);
+   Achieve 'Achieve ECC' dc(sat.Earth.ECC = 0.001);
+EndTarget;
+
+dv1 = toi.Element1;
+dv2 = goi.Element1;

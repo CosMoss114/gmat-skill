@@ -2,6 +2,59 @@
 
 本文档记录 GMAT Agent Skill 从首个版本至今的所有变更，包括新增功能、Bug 修复、架构调整和文档更新。
 
+## [v0.1.5] — 2026-06-01
+
+### Bug 修复 — Scene1: CSS 轨道衰减 (CherryStudio 实测)
+
+基于 CSS 轨道衰减仿真端到端测试的 22 次失败分析，修复以下问题：
+
+- **`python_runner.py` — subprocess 编码修复**: `validate_script()` 的 `subprocess.run` 改用二进制模式 + 手动 `decode("utf-8", errors="replace")`，解决 Windows GBK 终端下错误信息被编码损坏的问题。此前 GmatConsole 输出的真实错误（如 Non-ASCII）被 GBK 解码吞没，返回误导性 traceback。
+- **`python_runner.py` — ASCII 预检**: 新增 `_check_script_ascii()` 函数；`load_script()` 和 `validate_script()` 在加载前自动检查非 ASCII 字符，直接报告行号、字符和 Unicode codepoint，避免模糊的 "Non-ASCII character" 错误。
+- **`system_prompt.txt` — ForceModel 语法更新 (R2026a)**: `FM.Drag` 字段名、`JacchiaRoberts` 拼写、`SolarRadiationPressure`/`SPADSRPArea` 废弃标记
+- **`system_prompt.txt` — ASCII-Only 铁律**: 在硬规则中提升为第 0 规则，新增版本兼容矩阵
+- **`system_prompt.txt` — 差分仿真指南**: 新增轨道衰减必须使用有/无阻力差分对比的策略说明
+- **`SKILL.md`**: 新增 ASCII-Only、R2026a 语法变更 (规则 11-14)、差分仿真策略 (规则 15)
+- **执行环境指南**: `SKILL.md` 关键约束新增 "Python 执行环境"；`DEVGUIDE.md` 新增 "已知问题与故障排除" 节
+
+### Bug 修复 — Scene2: Hohmann 转移 (CherryStudio 实测)
+
+基于 Hohmann 转移仿真 (300km LEO → GEO 100°E) 测试的 3 次失败分析，修复以下问题：
+
+- **`python_runner.py` — 非 Spacecraft 对象参数读取**: `COMMON_PARAMETERS` 扩展为包含 ImpulsiveBurn (`Element1-3`)、ChemicalThruster (`C1-3`)、DifferentialCorrector (`MaximumIterations`) 的数值参数。`read_object()` 现在自动尝试所有参数并跳过不适用的，新增 `_type` 字段推断对象类型。
+- **`system_prompt.txt` — API/GUI 对象兼容性矩阵**: 新增 Python API 不支持 `OpenFramesInterface`/`GroundTrackPlot`/`OrbitView`/`XYPlot` 的明确说明，以及 API/GUI 双脚本分离策略。
+- **`SKILL.md` — API/GUI 脚本分离**: 关键约束新增分离策略条目
+
+### Bug 修复 — Scene3: 超同步转移 (CherryStudio 实测)
+
+基于超同步转移仿真 (400km/46° LEO → GEO 40°E) 的 28 次失败分析，修复以下问题：
+
+- **`system_prompt.txt` — ImpulsiveBurn 参考系完整指南**: 重写 ImpulsiveBurn 章节，新增 VNB 参考系限制说明（ECC > 0.5 远地点不可靠）、EarthMJ2000Eq 惯性系完整用法（CoordinateSystem/Axes 字段正确值、ΔV 计算模式）、参考系选择速查表
+- **`system_prompt.txt` — DifferentialCorrector 限制**: 新增 Target 系统 4 条限制（Jacobian 奇异、界约束锁死、高 ECC 停止条件、变量数上限）+ 使用检查清单
+- **`system_prompt.txt` — 多冲量策略**: 新增分步 Target 和逐步执行两种替代模式，覆盖 ≥3 冲量强耦合场景
+- **`SKILL.md`**: 新增规则 16-20 (VNB 限制、Axes 字段、惯性系 ImpulsiveBurn、Target 限制、多冲量策略)
+
+### 实测验证 — 超同步转移 (内部端到端测试)
+
+基于 Ex_GEOTransfer.script 官方模式，成功跑通完整超同步转移 (400km/46°→GEO)：
+
+- **节点变面策略验证**: 确认在 Z=0 节点处用 VNB 执行变面机动完全可靠（3 iter 收敛），远地点变面导致 ECC→1.47 双曲逃逸
+- **三 Target 块模式**: TOI(ΔV=3.005) + GOI(ΔV=0.620, V+N) + MOI(ΔV=0.886) 均在 3-4 次迭代内收敛，总 ΔV=4.511 km/s
+- **`system_prompt.txt` — 节点变面策略**: 新增完整决策逻辑 + 正确/错误模式对比
+- **`system_prompt.txt` — 可视化字段参考**: 新增 OFI/GTP 合法字段清单（OFI 不支持 DataCollectFrequency 等字段）+ 多边形效应消除方法
+- **`system_prompt.txt` — 常见错误**: 新增 22-27 号错误（VNB 高 ECC、Target 多变量、变面位置、OFI 非法字段、MaxStep 过大、节点跳过）
+- **`system_prompt.txt` — 脚本生成规则**: 新增 12-15 号规则（分块 Target、节点变面、GEO 双视图、步长选择）
+- **`SKILL.md`**: 新增规则 21-25 + 变轨参考系决策树（4 分支）
+- **`DEVGUIDE.md`**: 新增 3 个故障排除条目（VNB 高 ECC、OFI 多边形效应、OFI 非法字段）
+
+### 新增 — GmatFunction 集成
+
+- **调研**: 确认 GMAT R2026a 不支持 `.script` 内联 `function` 关键字，必须使用外部 `.gmf` 文件 + `FunctionPath` 引用。GmatConsole 和 Python API 均兼容
+- **`system_prompt.txt` — GmatFunction 语法参考**: 新增完整章节（定义 `.gmf` 文件、调用语法、输入/输出类型、Global 声明、使用场景决策表）
+- **`system_prompt.txt` — 错误 28**: 新增"内联 function 关键字"错误
+- **`references/templates/HohmannTarget.gmf`**: Hohmann 转移函数模板（Target 块封装）
+- **`references/templates/gmat_function_hohmann.script`**: 调用 GmatFunction 的主脚本模板
+- **`SKILL.md`**: 新增规则 26（GmatFunction 外部文件）
+
 ## [v0.1.4] — 2026-05-31
 
 ### 变轨检测 V0.3.0 — 双模式 + 趋势分析

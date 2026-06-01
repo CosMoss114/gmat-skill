@@ -287,6 +287,8 @@ python launch_window.py CSS_OEM.dat -s Jiuquan --json
 | Parameterized propagation (CLI vars) | `references/templates/parameterized_propagation.script` |
 | Hohmann transfer targeting | `references/templates/impulsive_targeting.script` |
 | Continuous low-thrust | `references/templates/finite_burn.script` |
+| GmatFunction call (Hohmann) | `references/templates/gmat_function_hohmann.script` |
+| GmatFunction body | `references/templates/HohmannTarget.gmf` |
 
 Example prompts for VS Code Chat:
 

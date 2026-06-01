@@ -10,6 +10,51 @@
 3. 脚本将被 python_runner.py 通过 GMAT Python API 加载并执行
 4. 如果执行失败，根据错误信息修正脚本
 
+## ⚠️ 关键约束 (V0.1.4+)
+
+### ASCII-Only 铁律
+GMAT 解释器**拒绝任何非 ASCII 字符**，包括注释中的中文、em-dash（—）、弯引号（""''）等。
+- ✅ 使用 `-` 而非 `—`
+- ✅ 使用 `"` `'` 而非 `""` `''`
+- ✅ 注释用英文，或确保不含非 ASCII 字符
+- ❌ `%% CSS 轨道衰减仿真 — 1 周预报` → 含 em-dash U+2014
+- ✅ `%% CSS Orbital Decay - 1 Week Prediction`
+
+### GMAT 版本兼容 (R2026a 实测)
+本系统基于 **GMAT R2026a** (2026年3月构建)。以下 API 在 R2026a 中已变更：
+| 旧语法 (≤R2020a) | R2026a 正确语法 |
+|---|---|
+| `FM.Drag = JacchiaRoberts` | `FM.Drag.AtmosphereModel = JacchiaRoberts` |
+| `FM.SolarRadiationPressure = On` | **不支持**, 生成脚本时避免 |
+| `Sat.SPADSRPArea` | **不支持** |
+| `JacobiaRoberts` | **拼写错误**, 正确为 `JacchiaRoberts` |
+
+### 轨道衰减仿真的差分策略
+当用户要求分析大气阻力轨道衰减时，**必须使用差分方法**（有阻力 vs 无阻力），因为：
+- 在 ~380 km 高度，纯阻力导致 SMA 衰减仅 ~0.5 km/周
+- J₂ 等引力摄动导致的 SMA 周期变化 ~5-6 km/周，远大于阻力效应
+- 单次"有阻力"仿真可见 SMA 上升，极易误判为"无衰减"
+
+正确流程：生成两份脚本（有阻力 + 无阻力），分别执行后对比差值。
+
+### Python API 与 GUI 对象兼容性
+
+GMAT Python API (`gmatpy`) 只能加载标准 GMAT 对象。以下 GUI 独有组件会**导致 `LoadScript()` 失败**：
+| 对象 | 用途 | API 兼容 |
+|------|------|:---:|
+| `OpenFramesInterface` | 3D 轨道可视化 | ❌ |
+| `GroundTrackPlot` | 星下点轨迹图 | ❌ |
+| `OrbitView` | 轨道视图 | ❌ |
+| `XYPlot` | 二维图表 | ❌ |
+| `ReportFile` | 文本输出 | ✅ |
+| `EphemerisFile` | 星历文件 | ✅ |
+
+**策略**: 始终生成**两份脚本**：
+1. **API 脚本** (`*_api.script`) — 仅含计算对象 (Spacecraft, Propagator, Burn, ReportFile)，供 `python_runner` 执行和迭代验证
+2. **GUI 脚本** (`*.script`) — 在 API 版基础上追加 `OpenFramesInterface`/`GroundTrackPlot` 块，供 GMAT GUI 可视化
+
+复杂任务工作流：API 脚本迭代验证通过 → 生成 GUI 版本 → 告知用户在 GMAT GUI 中打开。
+
 ---
 
 ## GMAT 脚本结构（硬约束）
@@ -39,6 +84,7 @@ Report RF;
 
 ### 硬规则
 
+0. **ASCII-Only（最重要）**: `.script` 文件必须为纯 ASCII — 不允许 em-dash（—）、弯引号（""''）、中文等非 ASCII 字符，即使出现在注释中也不行
 1. **所有 Create 必须在 BeginMissionSequence 之前**
 2. **对象必须先 Create 才能被引用**（不能引用尚未 Create 的对象）
 3. **BeginMissionSequence 只能出现一次**
@@ -90,7 +136,7 @@ Sat.Cd = 2.2;                % 大气阻力系数
 Sat.Cr = 1.8;                % 太阳辐射压系数
 Sat.DragArea = 15;           % 阻力面积 (m²)
 Sat.SRPArea = 15;            % SRP 面积 (m²)
-Sat.SPADSRPArea = 15;        % SPAD SRP 面积
+% 注意: GMAT R2026a 不支持 SPADSRPArea 字段，请勿使用
 ```
 
 **附加硬件**（可选）:
@@ -113,22 +159,36 @@ ElapsedSecs, ElapsedDays, TotalMass
 
 ### ForceModel（力模型）
 
+**GMAT R2026a API 变更警告**: 以下语法以 R2026a 实测为准。旧版 `FM.Drag = <model>` 和 `FM.SolarRadiationPressure` 字段已变更。
+
 ```
 Create ForceModel FM;
 FM.CentralBody = Earth;
 
-% 可选: 添加点质量引力源 (注意: Python API 中 Moon 需使用 "Luna")
-FM.PointMasses = {Sun};
+% 引力场模型 (可选，高阶场会引入 ~5 km 量级的周期振荡)
+FM.GravityField.Degree = 4;
+FM.GravityField.Order = 4;
+FM.GravityField.PotentialFile = '../data/gravity/earth/JGM3.cof';
 
-% 可选力源
-FM.Drag = None;                          % 不考虑大气阻力
-FM.Drag = JacobiaRoberts;               % 使用 Jacobia-Roberts 大气模型
-FM.SolarRadiationPressure = On;          % 启用太阳辐射压
+% 大气阻力 (R2026a 新语法)
+FM.Drag.AtmosphereModel = JacchiaRoberts;   % 使用 Jacchia-Roberts 大气模型
+% 注意: 正确拼写为 JacchiaRoberts (不是 JacobiaRoberts)
+
+% 太阳辐射压 — R2026a 中字段名可能不支持，生成脚本时避免使用
+% FM.SolarRadiationPressure = On;  ← 已废弃，R2026a 中会报错
+
+% 点质量引力源 (注意: Python API 中 Moon 需使用 "Luna")
+% 在 API 模式下 PointMasses 可能导致脚本加载失败，建议禁用
+% FM.PointMasses = {Sun, Luna};
 ```
 
-**注意**: Python API 中，月球天体名称为 `Luna`（非 `Moon`）。点质量引力源在 API 环境下可能导致轨道异常，MVP 阶段推荐仅使用纯地球中心引力。
+**大气阻力语法演进**:
+| GMAT 版本 | 语法 |
+|-----------|------|
+| R2018a-R2020a | `FM.Drag = JacchiaRoberts;` |
+| R2026a | `FM.Drag.AtmosphereModel = JacchiaRoberts;` |
 
-**可用大气模型**: `JacobiaRoberts`, `MSISE90`, `MSISE00`, `HarrisPriester`
+**可用大气模型**: `JacchiaRoberts` (注意拼写!), `MSISE90`, `MSISE00`, `HarrisPriester`
 
 **可用引力场模型文件**:
 - 地球: `../data/gravity/earth/JGM3.cof` (70x70), `../data/gravity/earth/EGM2008.cof`
@@ -160,23 +220,80 @@ Prop.MaxStep = 86400;                % 最大步长 (秒) = 1天
 
 ### ImpulsiveBurn（脉冲机动）
 
+ImpulsiveBurn 支持两种参考系，**选错参考系是失败的首要原因**。
+
+#### VNB 参考系（近圆轨道推荐）
+
+适用于 LEO/GEO 等低偏心率轨道 (ECC < 0.3)，此时 VNB 帧数值稳定：
+
 ```
 Create ImpulsiveBurn Burn1;
-Burn1.CoordinateSystem = Local;        % 或在 VNB/EarthMJ2000Eq 中
+Burn1.CoordinateSystem = Local;
 Burn1.Origin = Earth;
 Burn1.Axes = VNB;                      % VNB 坐标系 (速度-法向-次法向)
-Burn1.Element1 = 0.0;                  % 速度方向分量 (km/s)
-Burn1.Element2 = 0.0;                  % 法向分量
-Burn1.Element3 = 0.0;                  % 次法向分量
-Burn1.DecrementMass = false;           % 是否消耗质量
-Burn1.Isp = 300;                       % 比冲 (秒)
-Burn1.GravitationalAccel = 0.00981;    % 重力加速度 (km/s²)
+Burn1.Element1 = 0.0;                  % V 方向: 沿速度 (km/s), +加速
+Burn1.Element2 = 0.0;                  % N 方向: 轨道面法向, +为向轨道面正法向
+Burn1.Element3 = 0.0;                  % B 方向: V×N, 轨道面内⊥速度
+Burn1.DecrementMass = false;
+Burn1.Isp = 300;
+Burn1.GravitationalAccel = 0.00981;    % km/s²
 ```
 
-VNB 坐标系说明:
-- Element1 (V方向) = 沿速度方向 (正向加速)
-- Element2 (N方向) = 轨道面法向 (倾角变化)
-- Element3 (B方向) = 次法向 (V×N, 轨道面内垂直于速度)
+**⚠️ VNB 限制**: 在高度偏心轨道 (ECC > 0.5) 远地点，|v| 极小（如 ~0.35 km/s），VNB 帧计算数值不稳定。ImpulsiveBurn 的实际速度变化会严重偏离预期，导致轨道双曲化 (ECC>1)。**此时必须换用 EarthMJ2000Eq 参考系**。
+
+#### EarthMJ2000Eq 惯性参考系（偏心/多冲量推荐）
+
+当 VNB 不可靠时，使用惯性系直接指定 ΔV 的 X/Y/Z 分量：
+
+```
+Create ImpulsiveBurn Burn1;
+Burn1.CoordinateSystem = EarthMJ2000Eq;
+Burn1.Origin = Earth;
+Burn1.Axes = MJ2000Eq;                 % 注意: 是 "MJ2000Eq"，不是 "EarthMJ2000Eq"
+Burn1.Element1 = dv_x;                 % ΔV_X (km/s, EarthMJ2000Eq 惯性系)
+Burn1.Element2 = dv_y;                 % ΔV_Y
+Burn1.Element3 = dv_z;                 % ΔV_Z
+Burn1.DecrementMass = false;
+```
+
+**关键**: `Axes` 字段只接受 `MJ2000Eq`（不含 "Earth" 前缀），`CoordinateSystem` 用 `EarthMJ2000Eq`。
+
+#### 如何计算 EarthMJ2000Eq 下的 ΔV
+
+**必须在 GMAT 实时状态下计算**，不能依赖二体公式预计算（长时传播后累积偏差会导致失败）：
+
+```
+流程:
+1. 生成脚本: 传播到变轨点 → python_runner 执行 → 读取实际 Cartesian 状态
+2. Python 侧: 从 r=(x,y,z), v=(vx,vy,vz) 计算目标速度矢量 v_target
+3. ΔV = v_target - v_current  (均为 EarthMJ2000Eq 分量)
+4. 生成脚本: ImpulsiveBurn 施加 ΔV → 继续传播
+```
+
+**倾角消除示例** (超同步远地点 GOI):
+```python
+# 从 GMAT 读取远地点状态: r=(x,y,z), v=(vx,vy,vz)
+# 目标: 在赤道面内 (z 分量为 0), 速度矢量垂直于位置矢量
+rmag = sqrt(x² + y² + z²)
+r_xy = sqrt(x² + y²)
+v_target_mag = sqrt(2*μ/rmag - 2*μ/(rmag + R_GEO))
+vtx = v_target_mag * (-y / r_xy)   # 赤道面内 ⊥ r
+vty = v_target_mag * (x / r_xy)
+vtz = 0.0                           # 赤道面 z=0
+dv_x = vtx - vx; dv_y = vty - vy; dv_z = vtz - vz
+# → ImpulsiveBurn 施加 (dv_x, dv_y, dv_z) 在 EarthMJ2000Eq 下
+```
+
+#### 参考系选择速查
+
+| 场景 | 推荐参考系 | 原因 |
+|------|-----------|------|
+| LEO 圆轨道加速/减速 | VNB | 稳定可靠 |
+| Hohmann 转移两次点火 | VNB | ECC 适中 (0.0→0.72→0.0) |
+| 变倾角 (近圆轨道) | VNB | N 方向明确 |
+| 超同步/大椭圆远地点 | **EarthMJ2000Eq** | VNB 数值不稳定 |
+| 3+ 次脉冲组合变轨 | **EarthMJ2000Eq** | 避免 VNB 帧更新混乱 |
+| 定点经度 + 多约束 | **EarthMJ2000Eq** | Target 系统对此帧更稳定 |
 
 ---
 
@@ -223,6 +340,19 @@ DC.DerivativeMethod = ForwardDifference;
 DC.Algorithm = NewtonRaphson;
 ```
 
+**⚠️ Target 系统限制**:
+- 使用 Newton-Raphson 算法，需要**良好初始猜测**和**良态 Jacobian**
+- ≥4 个耦合变量时 Jacobian 容易奇异，导致不收敛
+- `Lower`/`Upper` 界约束过紧会锁死求解器（变量撞界后无法继续搜索）
+- 传播目标为 `Periapsis`/`Apoapsis` 时，若 ECC 在迭代中变得 >1，近/远地点永不存在，求解中断
+- **强耦合多变量问题推荐**: 拆分为多个独立的 Target 块，或使用逐步执行 + EarthMJ2000Eq ImpulsiveBurn
+
+**Target 使用检查清单**:
+1. 变量数 ≤ 3 且约束数 ≤ 3 → 可用（如 Hohmann: 2 Vary + 2 Achieve）
+2. 涉及倾角变化 → 优先用 EarthMJ2000Eq 参考系
+3. 涉及高 ECC 轨道 → 避免 `Propagate to Periapsis` 停止条件，改用 `ElapsedDays` 精确计时
+4. 收敛失败 → 检查 GmatLog 中的 Jacobian 条件数，放宽界约束
+
 ---
 
 ### ReportFile（报告文件输出）
@@ -259,6 +389,75 @@ EF.CoordinateSystem = EarthMJ2000Eq;
 ```
 
 可用格式: `CCSDS-OEM`, `CCSDS-AEM`, `SPK`, `STK-TimePosVel`, `Code500`, `Matlab`
+
+---
+
+### GmatFunction（GMAT 内联函数）
+
+GMAT 支持将可复用的传播/求解逻辑封装为函数，通过外部 `.gmf` 文件定义。
+**R2026a 不支持内联 `function` 关键字**——函数体必须在独立文件中。
+
+#### 定义（.gmf 文件）
+
+函数体写入 `<GMAT_ROOT>/userfunctions/gmat/<Name>.gmf`：
+
+```
+function [dv, sat] = HohmannTarget(sat, prop, toi, goi, dc)
+
+Create Variable dv;
+
+BeginMissionSequence
+
+Propagate 'To Periapsis' prop(sat) {sat.Earth.Periapsis};
+
+Target 'Hohmann' dc {SolveMode = Solve, ExitMode = SaveAndContinue};
+   Vary 'Vary TOI' dc(toi.Element1 = 1.0, {Perturbation = 0.0001, Lower = 0.1, Upper = 10.0, MaxStep = 0.5});
+   Maneuver 'TOI' toi(sat);
+   Propagate 'To Apogee' prop(sat) {sat.Earth.Apoapsis};
+   Achieve 'GEO' dc(sat.Earth.RMAG = 42165, {Tolerance = 0.1});
+   Vary 'Vary GOI' dc(goi.Element1 = 0.5, {Perturbation = 0.0001, Lower = 0.1, Upper = 5.0, MaxStep = 0.2});
+   Maneuver 'GOI' goi(sat);
+   Achieve 'Circ' dc(sat.Earth.ECC = 0.001);
+EndTarget;
+
+dv = toi.Element1;
+```
+
+#### 调用（主脚本）
+
+```
+Create GmatFunction HohmannTarget;
+HohmannTarget.FunctionPath = '../userfunctions/gmat/HohmannTarget.gmf';
+
+Create Variable dv1;
+
+BeginMissionSequence;
+
+GMAT [dv1, Sat] = HohmannTarget(Sat, Prop, TOI, GOI, DC);
+
+% 或含描述:
+'Hohmann' [dv1, Sat] = HohmannTarget(Sat, Prop, TOI, GOI, DC);
+```
+
+#### 关键约束
+
+- **必须外部文件**: 函数体在独立 `.gmf` 文件中，不可写入 `.script` 内
+- **默认路径**: `../userfunctions/gmat/` 相对于 GMAT `bin/` 目录
+- **FunctionPath**: 支持相对路径 (`../userfunctions/gmat/xxx.gmf`) 或绝对路径
+- **输入类型**: Spacecraft, Propagator, ImpulsiveBurn, DifferentialCorrector, Variable, Array, String
+- **输出类型**: Spacecraft, Variable, Array, String（不能直接输出 Burn/DC）
+- **Global**: 若需函数与主脚本共享 Spacecraft/Subscriber，用 `Global xxx;` 双向声明
+- **作用域**: 函数内 Create 的对象是局部变量，函数外不可见
+
+#### 何时使用
+
+| 场景 | 推荐 |
+|------|------|
+| 简单传播 | 不用函数，flat 脚本即可 |
+| 单次 Hohmann/变轨 | flat 脚本 + Target 块 |
+| **同一任务中多次调用** | ✅ GmatFunction |
+| **封装为可复用模块** | ✅ GmatFunction |
+| 含 OFI/GTP 的 GUI 脚本 | 不建议（可视化组件与函数交互复杂） |
 
 ---
 
@@ -368,6 +567,40 @@ Vary 参数:
 Achieve 参数:
 - `Tolerance` — 收敛容差
 - `Weight` — 权重 (多目标时)
+
+**多冲量复杂任务策略**: 当单 Target 块无法处理时（3+ 冲量、强耦合、高 ECC），采用**分步 Target**：
+
+```
+分步 Target 模式 (每个变轨阶段独立求解, 参照 Ex_GEOTransfer.script 官方模式):
+  第1步: TOI Target → 求解 ΔV1 (VNB Element1), 收敛后固化
+  第2步: GOI Target → 在节点处求解 ΔV2 (VNB Element1+Element2), 变面+抬近地点
+  第3步: MOI Target → 求解 ΔV3 (VNB Element1), 圆化
+
+逐步执行模式 (Python 侧计算, GMAT 侧执行):
+  1. GMAT 传播到变轨点 → python_runner 读实态
+  2. Python 从实态计算 EarthMJ2000Eq ΔV
+  3. GMAT ImpulsiveBurn 施加 ΔV → 继续传播
+  4. 循环
+```
+
+### 节点变面策略（重要 — Scene3 核心教训）
+
+对于**超同步/大椭圆转移中消除倾角**的任务，必须在**节点（Z=0）**处执行变面机动，**不可在远地点执行**：
+
+```
+错误模式 (VNB at apoapsis):
+  Propagate to Apogee; Maneuver GOI(Sat);  ← ECC>0.9远地点VNB不可靠 → ECC→1.47双曲逃逸
+
+正确模式 (VNB at node, 参照 Ex_GEOTransfer.script):
+  Target 1: TOI at 升交点 → raise apogee
+  Propagate to Apogee;
+  Propagate to Perigee;          ← 必须经过近地点，让Target拿到正确几何
+  Propagate to Z=0;              ← 在升交点执行变面
+  Target 2: GOI at 升交点 → VNB Element1(V)+Element2(N) 组合变面+抬近地点
+  Target 3: MOI at 近地点 → 圆化
+```
+
+**为什么是节点**: 节点处 |v| 足够大（~数 km/s），VNB 数值稳定。远地点 |v| 极小（~0.3 km/s），VNB 方向高度不确定。
 
 ---
 
@@ -786,7 +1019,47 @@ Propagate Prop(Sat) {Sat.ElapsedDays = 3};
 
 ---
 
-## 常见错误及避免方法
+## 可视化组件字段参考
+
+### OpenFramesInterface 合法字段
+
+```
+Create OpenFramesInterface OFI;
+OFI.SolverIterations = Current;
+OFI.UpperLeft        = [ 0.0 0.0 ];
+OFI.Size             = [ 0.5 0.5 ];
+OFI.Maximized        = false;
+OFI.Add              = {Sat, Earth};
+OFI.CoordinateSystem = EarthMJ2000Eq;   % 或 EarthFixed (GEO推荐)
+OFI.DrawObject       = [ true true ];
+OFI.DrawLabel        = [ true true ];
+OFI.Axes             = On;
+OFI.EnableStars      = On;
+OFI.StarCount        = 40000;
+OFI.ShowPlot         = true;
+```
+
+**不支持的字段**: `DataCollectFrequency`, `UpdatePlotFrequency`, `OpenFrameName` — 这些属于 GroundTrackPlot。
+
+### GroundTrackPlot 合法字段
+
+```
+Create GroundTrackPlot GTP;
+GTP.SolverIterations    = Current;
+GTP.UpperLeft           = [ 0.0 0.52 ];
+GTP.Size                = [ 1.0 0.45 ];
+GTP.Maximized           = false;
+GTP.Add                 = {Sat, Earth};
+GTP.DataCollectFrequency = 1;           % 每步采集
+GTP.UpdatePlotFrequency  = 50;          % 每50点刷新
+GTP.ShowPlot            = true;
+```
+
+### 多边形效应消除
+
+FixedView 中出现多边形轨迹 → **减小 `Prop.InitialStepSize`**（60s → 10s）。GEO 一圈 86400/10=8640 点即可平滑。OFI 不支持 DataCollectFrequency 调整采样率。
+
+---
 
 1. **Create 放在 BeginMissionSequence 之后** → GMAT 报错, 必须移前面
 2. **引用未 Create 的对象** → 确保所有对象先 Create
@@ -809,6 +1082,13 @@ Propagate Prop(Sat) {Sat.ElapsedDays = 3};
 19. **ChemicalTank.Volume 必须 ≥ FuelMass/FuelDensity** → 否则报 "Fuel volume exceeds tank capacity"
 20. **点质量使用 Moon 名称** → Python API 中需使用 `Luna`
 21. **脚本含非 ASCII 字符** → 注释中的中文或全角标点（— ""）会导致 GmatConsole 报错 "Non-ASCII character"，脚本注释必须纯英文 ASCII
+22. **VNB 在高 ECC 远地点不可靠** → ECC>0.8 时 VNB 帧数值不稳定，导致轨道双曲化(ECC>1)。改用 EarthMJ2000Eq 或移到节点处执行
+23. **单 Target 块 ≥4 耦合变量** → Jacobian 易奇异，Target 不收敛。拆分为多个独立 Target 块（参照 Ex_GEOTransfer.script）
+24. **变面机动在远地点执行** → |v|太小 VNB 方向不确定。应在 Z=0 节点处执行，V 分量足够大
+25. **OFI 使用 DataCollectFrequency** → 该字段不属于 OpenFramesInterface，会报错。减小步长替代
+26. **Prop.MaxStep 设太大** → 86400s (1天) 可能导致积分跳过关键事件。建议 MaxStep ≤ 600s
+27. **远地点后直接 Propagate to Z=0** → 若 AOP=0 则远地点=降交点(Z≈0)，Propagate 会原地停下。需先经过近地点再找下一升交点
+28. **`.script` 内使用 function 关键字** → R2026a 不支持内联函数。GmatFunction 函数体必须写在外部 `.gmf` 文件中，通过 `FunctionPath` 引用
 
 ---
 
@@ -825,3 +1105,7 @@ Propagate Prop(Sat) {Sat.ElapsedDays = 3};
 9. 当用户要求可视化/3D/图形时，添加 OpenFramesInterface 块（见模板 6），同时保留 ReportFile 供 API 读取
 10. 脚本中的所有注释和字符串必须使用纯 ASCII 字符，不得出现中文、全角标点（如 — ""）
 11. 当用户提供 OEM 文件时，脚本中不需要手动输入状态 — 使用 oem_reader.py 解析 OEM 得到初始状态后生成脚本
+12. 多冲量任务拆分为独立 Target 块（每个块 ≤2 Vary + ≤2 Achieve），参照 Ex_GEOTransfer.script 的分块模式
+13. 涉及倾角消除的任务，变面机动必须在 Z=0 节点处执行（不可在远地点），参照官方 GEOTransfer 案例
+14. GEO 任务 GUI 脚本标配双视图: OFI_Inertial (EarthMJ2000Eq) + OFI_Fixed (EarthFixed) + GroundTrackPlot
+15. 可视化脚本步长 ≤10s 以避免多边形效应；纯计算脚本步长可用 60s

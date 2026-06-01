@@ -177,6 +177,8 @@ OFI.ShowPlot = true;
 | 参数化传播（命令行可调） | `references/templates/parameterized_propagation.script` |
 | Hohmann 转移目标求解 | `references/templates/impulsive_targeting.script` |
 | 连续小推力推进 | `references/templates/finite_burn.script` |
+| GmatFunction 调用 (Hohmann) | `references/templates/gmat_function_hohmann.script` |
+| GmatFunction 函数体 | `references/templates/HohmannTarget.gmf` |
 
 VS Code Chat 中的示例提示：
 

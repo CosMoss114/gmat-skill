@@ -1,0 +1,55 @@
+%% GmatFunction template: Hohmann transfer using GmatFunction
+%%
+%% Requires: HohmannTarget.gmf in <GMAT_ROOT>/userfunctions/gmat/
+
+Create Spacecraft Sat;
+Sat.DateFormat       = UTCGregorian;
+Sat.Epoch            = '01 Jun 2026 00:00:00.000';
+Sat.CoordinateSystem = EarthMJ2000Eq;
+Sat.DisplayStateType = Keplerian;
+Sat.SMA              = 6678.1363;
+Sat.ECC              = 0.001;
+Sat.INC              = 28.5;
+Sat.RAAN             = 0;
+Sat.AOP              = 0;
+Sat.TA               = 180;
+
+Create ForceModel FM;
+FM.CentralBody = Earth;
+
+Create Propagator Prop;
+Prop.FM              = FM;
+Prop.Type            = PrinceDormand78;
+Prop.InitialStepSize = 60;
+Prop.Accuracy        = 1.0e-11;
+
+Create ImpulsiveBurn TOI;
+TOI.CoordinateSystem   = Local;
+TOI.Origin             = Earth;
+TOI.Axes               = VNB;
+TOI.DecrementMass      = false;
+
+Create ImpulsiveBurn GOI;
+GOI.CoordinateSystem   = Local;
+GOI.Origin             = Earth;
+GOI.Axes               = VNB;
+GOI.DecrementMass      = false;
+
+Create DifferentialCorrector DC;
+DC.MaximumIterations = 50;
+
+Create GmatFunction HohmannTarget;
+HohmannTarget.FunctionPath = '../userfunctions/gmat/HohmannTarget.gmf';
+
+Create Variable DV1 DV2;
+
+Create ReportFile RF;
+RF.Filename = 'hohmann_func_output.txt';
+RF.Add = {Sat.EarthMJ2000Eq.X, Sat.EarthMJ2000Eq.Y, Sat.EarthMJ2000Eq.Z, ...
+          Sat.EarthMJ2000Eq.VX, Sat.EarthMJ2000Eq.VY, Sat.EarthMJ2000Eq.VZ};
+
+BeginMissionSequence;
+
+'Hohmann Transfer' [DV1, DV2, Sat] = HohmannTarget(Sat, Prop, TOI, GOI, DC);
+
+Propagate 'Prop 1 day' Prop(Sat) {Sat.ElapsedDays = 1.0};
