@@ -110,19 +110,4 @@ description: "Use when the user wants to run GMAT (General Mission Analysis Tool
 
 ## 文件说明
 
-| 文件 | 用途 |
-|------|------|
-| `README.md` | 英文使用说明 |
-| `README_CN.md` | 中文使用说明 |
-| `assets/system_prompt.txt` | LLM 系统提示词 — GMAT 脚本语法完整参考 |
-| `assets/default_config.yaml` | **唯一配置入口** — GMAT 路径、轨道默认值、物理常量 |
-| `scripts/runner/python_runner.py` | Python 执行引擎 — 加载/执行/读取结果 + 程序化 API + -D 模板变量 + --validate |
-| `scripts/fetch/fetch_oem.py` | OEM 数据获取 — 从 cmse.gov.cn 自动下载 CSS 轨道数据 |
-| `scripts/analysis/parameter_scan.py` | 参数扫描 — 批量传播 + 汇总表格/趋势图 |
-| `scripts/analysis/oem_reader.py` | OEM 解析器 — 解析 CCSDS OEM v2.0，Cartesian→Keplerian 解析计算 |
-| `scripts/analysis/plot_altitude.py` | 高度绘图 — 近/远地点高度时间序列图 |
-| `scripts/analysis/maneuver_detector.py` | 变轨检测 V0.3.0 — 10-bin趋势 + 脉冲/连续双模式 |
-| `scripts/prediction/launch_window.py` | 发射窗口计算 — 空间站过顶预测（Kepler+J2 传播 + 方向滤波） |
-| `scripts/test/smoke_test.py` | CI 冒烟测试 — 5 条核心管线验证 |
-| `references/templates/*.script` | 4 个可运行脚本模板（含 {{PLACEHOLDER}} 参数化 + 默认值） |
-| `references/samples/` | 19 个精选 GMAT 官方示例 + INDEX.md |
+详见 [README.md](README.md)（英文）或 [README_CN.md](README_CN.md)（中文）。

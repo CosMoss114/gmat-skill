@@ -5,9 +5,37 @@ GOI ΔV 用分析预计算 (与GMAT实态偏差<1.5%可接受)
 """
 import os, sys, math
 
-GMAT_ROOT = r"e:\GMAT\gmat-win-R2026a"
+def _load_gmat_config():
+    """Load GMAT root + output dir: env var GMAT_ROOT → default_config.yaml → error.
+    Uses yaml.safe_load() if available, falls back to simple line parsing."""
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "default_config.yaml")
+    config = {}
+    env_root = os.environ.get("GMAT_ROOT", "")
+    try:
+        import yaml
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+    except ImportError:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(("gmat_root:", "output_dir:")):
+                        k, v = line.split(":", 1)
+                        config[k.strip()] = v.strip().strip('"').strip("'")
+    root = env_root or config.get("gmat_root", "")
+    if not root:
+        raise RuntimeError(
+            "GMAT root not configured. Set env var GMAT_ROOT or edit gmat_root in assets/default_config.yaml"
+        )
+    output_dir = config.get("output_dir", os.path.join(root, "output"))
+    return root, output_dir
+
+GMAT_ROOT, OUTPUT_DIR = _load_gmat_config()
 bin_dir = os.path.join(GMAT_ROOT, "bin")
-sys.path.insert(0, bin_dir)
+if bin_dir not in sys.path:
+    sys.path.insert(1, bin_dir)
 import gmatpy as gmat
 
 startup = os.path.join(bin_dir, "api_startup_file.txt")
@@ -76,7 +104,7 @@ print(f"    Check |DV|={dv_goi_check:.6f} (should = {dv_goi_mag:.6f})")
 print(f"  Circ: DV={dv_circ:.4f} km/s (VNB Element1, braking)")
 print(f"  Total: {dv_toi+dv_goi_mag+abs(dv_circ):.4f} km/s")
 
-SCRIPT = os.path.join(GMAT_ROOT, "output", "supersync_final.script")
+SCRIPT = os.path.join(OUTPUT_DIR, "supersync_final.script")
 
 # 单脚本: 所有3次点火
 script = f"""Create Spacecraft Sat;
@@ -142,7 +170,7 @@ with open(SCRIPT, "w", encoding="ascii") as f:
 print(f"\nLoading script: {SCRIPT}")
 if not gmat.LoadScript(SCRIPT):
     print("LoadScript FAILED!")
-    log = os.path.join(GMAT_ROOT, "output", "GmatLog.txt")
+    log = os.path.join(OUTPUT_DIR, "GmatLog.txt")
     if os.path.exists(log):
         with open(log, "r", encoding="utf-8", errors="replace") as lf:
             for line in lf.readlines()[-15:]:

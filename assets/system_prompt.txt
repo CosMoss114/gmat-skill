@@ -206,7 +206,7 @@ Prop.Type = PrinceDormand78;          % 积分器类型
 Prop.InitialStepSize = 60;            % 初始步长 (秒)
 Prop.Accuracy = 1.0e-11;              % 精度
 Prop.MinStep = 1.0e-6;               % 最小步长 (秒)
-Prop.MaxStep = 86400;                % 最大步长 (秒) = 1天
+Prop.MaxStep = 600;                  % 最大步长 (秒) — 必须 ≤600s, 86400s 可能跳过关键事件
 ```
 
 **可用积分器**:

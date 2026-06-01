@@ -376,10 +376,11 @@ def apply_template(script_path: str, variables: dict) -> str:
     merged = dict(defaults)
     merged.update(variables)
 
-    # ---- 替换所有占位符 ----
-    for key, value in merged.items():
-        placeholder = "{{" + key + "}}"
-        content = content.replace(placeholder, str(value))
+    # ---- 单遍替换 (避免级联: value 中的 {{KEY}} 不会被二次替换) ----
+    def _replace_placeholder(match):
+        key = match.group(1)
+        return str(merged.get(key, match.group(0)))
+    content = re.sub(r'\{\{(\w+)\}\}', _replace_placeholder, content)
 
     # 检查是否有未替换的占位符
     unreplaced = re.findall(r'\{\{(\w+)\}\}', content)
@@ -412,6 +413,8 @@ _original_stdout = None
 def _suppress_gmat_output():
     """将 stdout 重定向到 os.devnull，抑制 GMAT 调试输出"""
     global _original_stdout
+    if _original_stdout is not None:
+        return  # 已抑制, 避免嵌套调用丢失原始 stdout 引用
     _original_stdout = sys.stdout
     sys.stdout = open(os.devnull, "w")
 
@@ -419,10 +422,19 @@ def _suppress_gmat_output():
 def _restore_stdout():
     """恢复原始 stdout"""
     global _original_stdout
-    if _original_stdout:
+    if _original_stdout is not None:
         sys.stdout.close()
         sys.stdout = _original_stdout
         _original_stdout = None
+
+
+def _with_suppressed_output(fn, *args, **kwargs):
+    """安全执行 fn，确保 suppress/restore 始终配对，即使 fn 抛出异常"""
+    _suppress_gmat_output()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _restore_stdout()
 
 
 def load_script(script_path: str, gmat_root: str = "") -> dict:
@@ -518,7 +530,7 @@ def run_mission() -> dict:
 # ==============================================================================
 
 # 常用可读参数列表 (按对象类型分组，尝试读取时自动跳过不适用的参数)
-COMMON_PARAMETERS = [
+COMMON_PARAMETERS = (
     # Spacecraft / CelestialBody
     "SMA", "ECC", "INC", "RAAN", "AOP", "TA",
     "X", "Y", "Z", "VX", "VY", "VZ",
@@ -532,7 +544,7 @@ COMMON_PARAMETERS = [
     "C1", "C2", "C3",
     # DifferentialCorrector
     "MaximumIterations",
-]
+)
 
 
 def read_object(obj_name: str) -> dict:
@@ -642,40 +654,53 @@ def parse_report_file(report_path: str) -> dict:
 
 def load_config(config_path: str = None) -> dict:
     """
-    从 default_config.yaml 加载配置。
-    优先级: GMAT_ROOT 环境变量 > YAML 配置文件
-    支持 {gmat_root} 占位符自动替换。
+    从 default_config.yaml 加载配置，优先使用 yaml.safe_load()（需 PyYAML）。
+    若 PyYAML 不可用，降级为简单行解析（仅提取 gmat_root 和 output_dir）。
+
+    优先级: --gmat-root CLI > GMAT_ROOT 环境变量 > YAML 文件中的 gmat_root
+    支持 {gmat_root} 占位符自动展开（顶层键和嵌套字符串值均适用）。
     """
     if config_path is None:
-        # default_config.yaml 在 assets/ 目录下，从 scripts/runner/ 向上两级
         assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets")
         config_path = os.path.join(assets_dir, "default_config.yaml")
 
     if not os.path.exists(config_path):
         return {}
 
-    config = {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            # 跳过注释和空行
-            if line.startswith("#") or not line or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            config[key] = value
+    # ---- 尝试 yaml.safe_load() ----
+    try:
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+    except ImportError:
+        # PyYAML 不可用，降级为简单行解析
+        config = {}
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#") or not line or ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                config[key] = value
 
     # GMAT_ROOT 环境变量优先
     env_root = os.environ.get("GMAT_ROOT", "")
     if env_root:
         config["gmat_root"] = env_root
 
-    # 替换 {gmat_root} 占位符
-    root = config.get("gmat_root", "")
-    for k, v in config.items():
+    # 替换 {gmat_root} 占位符（顶层字符串值 + 一层嵌套字符串值）
+    def _expand_placeholder(v):
         if isinstance(v, str) and "{gmat_root}" in v:
-            config[k] = v.replace("{gmat_root}", root)
+            return v.replace("{gmat_root}", root or "")
+        if isinstance(v, dict):
+            return {k2: _expand_placeholder(v2) for k2, v2 in v.items()}
+        return v
+
+    root = config.get("gmat_root", "")
+    if root:
+        config = {k: _expand_placeholder(v) for k, v in config.items()}
 
     return config
 
@@ -803,9 +828,7 @@ def main():
         sys.exit(1)
 
     # --- Step 2: 加载脚本 ---
-    _suppress_gmat_output()
-    load_result = load_script(script_to_run, gmat_root)
-    _restore_stdout()
+    load_result = _with_suppressed_output(load_script, script_to_run, gmat_root)
     if not load_result["success"]:
         result.update(load_result)
         _print_result(result, _messages, args.format)
@@ -813,9 +836,7 @@ def main():
         sys.exit(1)
 
     # --- Step 3: 执行 ---
-    _suppress_gmat_output()
-    run_result = run_mission()
-    _restore_stdout()
+    run_result = _with_suppressed_output(run_mission)
     if not run_result["success"]:
         result.update(run_result)
         result["stage"] = "run"

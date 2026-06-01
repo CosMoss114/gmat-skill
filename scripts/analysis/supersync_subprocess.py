@@ -11,8 +11,33 @@ R_LEO = R_EARTH + 400.0
 INC_INIT = 46.0
 R_A = 200000.0
 
-GMAT_ROOT = r"e:\GMAT\gmat-win-R2026a"
-OUTPUT = os.path.join(GMAT_ROOT, "output")
+def _load_gmat_config():
+    """Load GMAT root + output dir: env var GMAT_ROOT → default_config.yaml → error."""
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "default_config.yaml")
+    config = {}
+    env_root = os.environ.get("GMAT_ROOT", "")
+    try:
+        import yaml
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+    except ImportError:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(("gmat_root:", "output_dir:")):
+                        k, v = line.split(":", 1)
+                        config[k.strip()] = v.strip().strip('"').strip("'")
+    root = env_root or config.get("gmat_root", "")
+    if not root:
+        raise RuntimeError(
+            "GMAT root not configured. Set env var GMAT_ROOT or edit gmat_root in assets/default_config.yaml"
+        )
+    output_dir = config.get("output_dir", os.path.join(root, "output"))
+    return root, output_dir
+
+GMAT_ROOT, OUTPUT = _load_gmat_config()
 
 def gmat_step(script_file, object_names):
     """在新进程中运行 GMAT 脚本，读取对象状态返回 JSON"""

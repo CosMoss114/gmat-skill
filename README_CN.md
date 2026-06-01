@@ -143,31 +143,7 @@ python scripts/test/smoke_test.py --verbose  # 详细输出
 
 ## GUI 兼容性
 
-本 Skill 生成的所有脚本均为**标准 GMAT `.script` 格式**，与 GMAT 图形界面完全兼容。
-
-- 打开 `GMAT.exe` → **File → Open** → 选择生成的 `.script` 文件
-- 点击**运行按钮**（▶）即可执行，并获得完整的 3D 可视化
-- 与 Python API 不同，GUI 支持 `OpenFramesInterface` 进行交互式 3D 轨道显示
-- 脚本同样可在 `GmatConsole.exe`（命令行模式）中运行
-
-**如需 3D 可视化**，在脚本的 `BeginMissionSequence` 之前插入：
-
-```
-Create OpenFramesInterface OFI;
-OFI.SolverIterations = Current;
-OFI.UpperLeft = [ 0 0 ];
-OFI.Size = [ 0.6 0.5 ];
-OFI.Maximized = false;
-OFI.Add = {Sat, Earth};
-OFI.CoordinateSystem = EarthMJ2000Eq;
-OFI.DrawObject = [ true true ];
-OFI.DrawLabel = [ true true ];
-OFI.Axes = On;
-OFI.EnableStars = On;
-OFI.ShowPlot = true;
-```
-
-> **注意**: GMAT `.script` 文件必须使用 **纯 ASCII 字符**。注释中的中文、全角标点（如 `—` `"` `"`）会导致解析错误。
+所有脚本均为**标准 GMAT `.script` 格式**，与 `GMAT.exe` 完全兼容，打开即可 3D 可视化。GUI 相关规则（OFI 字段限制、API/GUI 分离、OpenFramesInterface 配置）见 [SKILL.md](SKILL.md#已验证的-gmat-脚本语法重要) 和 [system_prompt.txt](assets/system_prompt.txt)。
 
 ## 使用示例
 

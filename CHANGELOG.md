@@ -2,6 +2,37 @@
 
 本文档记录 GMAT Agent Skill 从首个版本至今的所有变更，包括新增功能、Bug 修复、架构调整和文档更新。
 
+## [v0.1.6] — 2026-06-01
+
+### 安全更新 — FileReviewer 审查驱动修复 + 配置系统迁移
+
+基于 FileReviewer 子代理多维度代码审查（正确性/代码质量/安全性/架构）的 23 项发现，修复 11 项已确认问题。
+
+### 配置系统迁移
+
+- **`python_runner.py` — `load_config()` 重写**: 手写行解析器 → `yaml.safe_load()`，正确解析嵌套结构、数组和布尔值。PyYAML 不可用时优雅降级为简单行解析（确保 `gmat_root` 始终可读）。
+- **`requirements.txt`**: 新增，声明全部 Python 依赖：`pyyaml`, `requests`, `beautifulsoup4`, `numpy`, `matplotlib`
+- **supersync 配置统一**: 3 个脚本的 `_resolve_gmat_root()` → 统一的 `_load_gmat_config()`（`yaml.safe_load` + 降级），同时修复 `output_dir` 硬编码问题
+
+### 安全修复
+
+- **`supersync_*.py` — 硬编码路径消除**: `GMAT_ROOT = r"e:\GMAT\..."` → 环境变量 → `default_config.yaml` → 明确报错
+- **`default_config.yaml` / `system_prompt.txt` — `max_step`/`MaxStep` 矛盾**: 86400s → 600s，与 SKILL.md 规则 25 一致
+- **`python_runner.py` — `_with_suppressed_output()`**: 确保 stdout 抑制/恢复始终配对（try/finally），防止异常导致 stdout 永久丢失
+- **`python_runner.py` — `_check_script_ascii` 二进制模式**: 文本模式 (UTF-8, errors=replace) → 二进制模式 (`"rb"`)，消除 GBK 文件假阳性
+- **`python_runner.py` — 模板级联替换**: `for` 逐对 `str.replace` → `re.sub` 单遍替换，防止 value 中 `{{KEY}}` 被二次替换
+- **`supersync_*.py` — `sys.path.insert` 优先级**: `insert(0)` → `insert(1)` + 去重检查，降低同名模块覆盖标准库风险
+- **`fetch_oem.py` — `os.rename`**: → `shutil.move`，支持跨驱动器解压
+- **`python_runner.py` — `COMMON_PARAMETERS`**: `list` → `tuple`（不可变）
+
+### 文档更新
+
+- **源代码树 `AGENTS.md`**: 语法规则去重（26→7 条关键点 + 链接到 SKILL.md），删除自引用，合并中英文文档索引表
+- **源代码树 `DEVGUIDE.md`**: V0.1.6 改为安全更新，原定功能推迟至 V0.1.7；添加交叉引用到 SKILL.md 规则
+- **`SKILL.md`**: "文件说明" 表 → 链接到 README
+- **`README.md` / `README_CN.md`**: GUI 兼容性章节精简，OFI 代码块 → 链接到 SKILL.md
+- **`gmat-triage.instructions.md`**: 添加 `name` 字段
+
 ## [v0.1.5] — 2026-06-01
 
 ### Bug 修复 — Scene1: CSS 轨道衰减 (CherryStudio 实测)
@@ -14,7 +45,7 @@
 - **`system_prompt.txt` — ASCII-Only 铁律**: 在硬规则中提升为第 0 规则，新增版本兼容矩阵
 - **`system_prompt.txt` — 差分仿真指南**: 新增轨道衰减必须使用有/无阻力差分对比的策略说明
 - **`SKILL.md`**: 新增 ASCII-Only、R2026a 语法变更 (规则 11-14)、差分仿真策略 (规则 15)
-- **执行环境指南**: `SKILL.md` 关键约束新增 "Python 执行环境"；`DEVGUIDE.md` 新增 "已知问题与故障排除" 节
+- **执行环境指南**: `SKILL.md` 关键约束新增 "Python 执行环境"；源代码树 `DEVGUIDE.md` 新增 "已知问题与故障排除" 节
 
 ### Bug 修复 — Scene2: Hohmann 转移 (CherryStudio 实测)
 
@@ -44,7 +75,7 @@
 - **`system_prompt.txt` — 常见错误**: 新增 22-27 号错误（VNB 高 ECC、Target 多变量、变面位置、OFI 非法字段、MaxStep 过大、节点跳过）
 - **`system_prompt.txt` — 脚本生成规则**: 新增 12-15 号规则（分块 Target、节点变面、GEO 双视图、步长选择）
 - **`SKILL.md`**: 新增规则 21-25 + 变轨参考系决策树（4 分支）
-- **`DEVGUIDE.md`**: 新增 3 个故障排除条目（VNB 高 ECC、OFI 多边形效应、OFI 非法字段）
+- **源代码树 `DEVGUIDE.md`**: 新增 3 个故障排除条目（VNB 高 ECC、OFI 多边形效应、OFI 非法字段）
 
 ### 新增 — GmatFunction 集成
 
@@ -89,8 +120,8 @@
 ### 文档
 
 - README/README_CN: 路径更新到 V0.1.3 三层结构，新增 OEM 获取、参数扫描、测试章节
-- AGENTS.md: GMAT Python API 章节 + 15 条脚本语法规则
-- DEVGUIDE.md: V0.1.4 短期目标全部标记完成
+- 源代码树 AGENTS.md: GMAT Python API 章节 + 15 条脚本语法规则
+- 源代码树 DEVGUIDE.md: V0.1.4 短期目标全部标记完成
 - SKILL.md: 文件结构引用更新
 
 ## [v0.1.3] — 2026-05-29
@@ -119,7 +150,7 @@
 
 ### 文档
 
-- 全面更新 `SKILL.md`、`README.md`、`README_CN.md`、`AGENTS.md` 中的路径引用
+- 全面更新 `SKILL.md`、`README.md`、`README_CN.md`、源代码树 `AGENTS.md` 中的路径引用
 - `references/samples/INDEX.md` — 精选脚本索引与使用说明
 
 ---

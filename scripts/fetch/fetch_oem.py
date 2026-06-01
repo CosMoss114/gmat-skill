@@ -118,7 +118,8 @@ def extract_oem(zip_path: str, dest_dir: str) -> list[str]:
                     extracted_path = os.path.join(dest_dir, name)
                     if extracted_path != dest:
                         if os.path.exists(extracted_path):
-                            os.rename(extracted_path, dest)
+                            import shutil
+                            shutil.move(extracted_path, dest)
                             # 清理空目录
                             subdir = os.path.dirname(extracted_path)
                             try:
